@@ -1,0 +1,12 @@
+{
+  "expo": {
+    "name": "A7R II Live View Test",
+    "slug": "a7rii-liveview-test",
+    "version": "0.1.1",
+    "orientation": "landscape",
+    "plugins": ["expo-sony-camera"],
+    "android": {
+      "package": "com.dbrouste.a7riiliveviewtest"
+    }
+  }
+}

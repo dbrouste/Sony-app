@@ -1,0 +1,21 @@
+{
+  "name": "sony-a7rii-liveview-test",
+  "version": "0.1.1",
+  "private": true,
+  "main": "node_modules/expo/AppEntry.js",
+  "scripts": {
+    "start": "expo start",
+    "typecheck": "tsc --noEmit",
+    "build:apk": "npx eas-cli build --platform android --profile preview"
+  },
+  "dependencies": {
+    "expo": "~57.0.7",
+    "expo-sony-camera": "0.2.1",
+    "react": "19.2.3",
+    "react-native": "0.86.0"
+  },
+  "devDependencies": {
+    "@types/react": "~19.2.2",
+    "typescript": "~6.0.3"
+  }
+}
