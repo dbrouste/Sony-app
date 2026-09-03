@@ -1,0 +1,29 @@
+diff --git a/node_modules/expo-sony-camera/android/src/main/java/expo/modules/sonycamera/SonyScalarWebApiTransport.kt b/node_modules/expo-sony-camera/android/src/main/java/expo/modules/sonycamera/SonyScalarWebApiTransport.kt
+index e97326d..a1062a2 100644
+--- a/node_modules/expo-sony-camera/android/src/main/java/expo/modules/sonycamera/SonyScalarWebApiTransport.kt
++++ b/node_modules/expo-sony-camera/android/src/main/java/expo/modules/sonycamera/SonyScalarWebApiTransport.kt
+@@ -50,8 +50,10 @@ internal class SonyScalarWebApiTransport private constructor(
+           }
+           val apiBaseUrl = extract(xml, "X_ScalarWebAPI_ActionList_URL")
+             ?: throw SonyPtpException("Sony ScalarWebAPI control URL is missing.")
+-          val liveViewUrl = extract(xml, "X_ScalarWebAPI_LiveView_URL")
+-            ?: throw SonyPtpException("Sony ScalarWebAPI live-view URL is missing.")
++          // Older PlayMemories/Smart Remote Control bodies such as the A7R II may omit
++          // X_ScalarWebAPI_LiveView_URL. They return the active stream URL from
++          // startLiveview instead, so a missing descriptor value is not a discovery error.
++          val liveViewUrl = extract(xml, "X_ScalarWebAPI_LiveView_URL").orEmpty()
+           val modelName = extract(xml, "modelName") ?: "Sony Scalar Camera"
+           val serviceUrls = extractServiceUrls(xml, apiBaseUrl)
+           trace(
+@@ -181,7 +183,10 @@ internal class SonyScalarWebApiTransport private constructor(
+       call("startLiveview").optJSONArray("result")?.optString(0)?.takeIf(String::isNotBlank)
+         ?: throw SonyPtpException("Sony did not return an active live-view URL.")
+     } else {
+-      descriptor.liveViewUrl
++      descriptor.liveViewUrl.takeIf(String::isNotBlank)
++        ?: throw SonyPtpException(
++          "Sony camera advertises neither startLiveview nor a descriptor live-view URL.",
++        )
+     }
+     val connection = network.open(activeLiveViewUrl).apply {
+       requestMethod = "GET"

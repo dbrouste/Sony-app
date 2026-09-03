@@ -1,11 +1,12 @@
 {
   "name": "sony-a7rii-liveview-test",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "main": "node_modules/expo/AppEntry.js",
   "scripts": {
     "start": "expo start",
     "typecheck": "tsc --noEmit",
+    "postinstall": "patch-package",
     "build:apk": "npx eas-cli build --platform android --profile preview"
   },
   "dependencies": {
@@ -16,6 +17,7 @@
   },
   "devDependencies": {
     "@types/react": "~19.2.2",
+    "patch-package": "^8.0.1",
     "typescript": "~6.0.3"
   }
 }
