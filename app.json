@@ -2,11 +2,15 @@
   "expo": {
     "name": "A7R II Live View Test",
     "slug": "a7rii-liveview-test",
-    "version": "0.1.1",
+    "version": "0.1.2",
     "orientation": "landscape",
-    "plugins": ["expo-sony-camera"],
     "android": {
       "package": "com.dbrouste.a7riiliveviewtest"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "ccc13902-22b3-441f-a359-bc80ad553a8b"
+      }
     }
   }
 }
