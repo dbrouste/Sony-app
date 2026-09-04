@@ -254,33 +254,90 @@ index 015b9a8..f0cae00 100644
  
  internal object SonyCameraRegistry {
 diff --git a/node_modules/expo-sony-camera/android/src/main/java/expo/modules/sonycamera/SonyScalarWebApiTransport.kt b/node_modules/expo-sony-camera/android/src/main/java/expo/modules/sonycamera/SonyScalarWebApiTransport.kt
-index e97326d..332c2ff 100644
+index e97326d..81a7d82 100644
 --- a/node_modules/expo-sony-camera/android/src/main/java/expo/modules/sonycamera/SonyScalarWebApiTransport.kt
 +++ b/node_modules/expo-sony-camera/android/src/main/java/expo/modules/sonycamera/SonyScalarWebApiTransport.kt
-@@ -50,13 +50,19 @@ internal class SonyScalarWebApiTransport private constructor(
+@@ -48,15 +48,25 @@ internal class SonyScalarWebApiTransport private constructor(
+           if (!xml.contains("ScalarWebAPI", ignoreCase = true)) {
+             throw SonyPtpException("Sony endpoint did not advertise ScalarWebAPI.")
            }
-           val apiBaseUrl = extract(xml, "X_ScalarWebAPI_ActionList_URL")
+-          val apiBaseUrl = extract(xml, "X_ScalarWebAPI_ActionList_URL")
++          val rawApiBaseUrl = extract(xml, "X_ScalarWebAPI_ActionList_URL")
              ?: throw SonyPtpException("Sony ScalarWebAPI control URL is missing.")
--          val liveViewUrl = extract(xml, "X_ScalarWebAPI_LiveView_URL")
--            ?: throw SonyPtpException("Sony ScalarWebAPI live-view URL is missing.")
++          val apiBaseUrl = resolveEndpoint(descriptorUrl, rawApiBaseUrl)
 +          // Older PlayMemories/Smart Remote Control bodies such as the A7R II may omit
 +          // X_ScalarWebAPI_LiveView_URL. They return the active stream URL from
 +          // startLiveview instead, so a missing descriptor value is not a discovery error.
-+          val liveViewUrl = extract(xml, "X_ScalarWebAPI_LiveView_URL").orEmpty()
+           val liveViewUrl = extract(xml, "X_ScalarWebAPI_LiveView_URL")
+-            ?: throw SonyPtpException("Sony ScalarWebAPI live-view URL is missing.")
++            ?.let { resolveEndpoint(descriptorUrl, it) }
++            .orEmpty()
            val modelName = extract(xml, "modelName") ?: "Sony Scalar Camera"
-           val serviceUrls = extractServiceUrls(xml, apiBaseUrl)
-+          val livePort = liveViewUrl
-+            .takeIf(String::isNotBlank)
-+            ?.let { URL(it).port.toString() }
+-          val serviceUrls = extractServiceUrls(xml, apiBaseUrl)
++          val serviceUrls = extractServiceUrls(xml, apiBaseUrl, descriptorUrl)
++          val apiPort = runCatching { URL(apiBaseUrl).port }.getOrDefault(-1)
++          val livePort = liveViewUrl.takeIf(String::isNotBlank)
++            ?.let { runCatching { URL(it).port.toString() }.getOrDefault("unparsed") }
 +            ?: "dynamic"
++          trace("Scalar endpoints api=$apiBaseUrl live=${liveViewUrl.ifBlank { "dynamic" }}")
            trace(
-             "Scalar discovered host=$host api=${URL(apiBaseUrl).port} " +
+-            "Scalar discovered host=$host api=${URL(apiBaseUrl).port} " +
 -              "live=${URL(liveViewUrl).port} services=${serviceUrls.keys.sorted()}",
++            "Scalar discovered host=$host api=$apiPort " +
 +              "live=$livePort services=${serviceUrls.keys.sorted()}",
            )
            return SonyScalarWebApiTransport(
              Descriptor(host, descriptorUrl, apiBaseUrl, liveViewUrl, modelName, serviceUrls),
-@@ -149,6 +155,7 @@ internal class SonyScalarWebApiTransport private constructor(
+@@ -85,7 +95,11 @@ internal class SonyScalarWebApiTransport private constructor(
+      * action-list URL. Falls back to the advertised action-list base for any service the
+      * descriptor names without a URL.
+      */
+-    private fun extractServiceUrls(xml: String, apiBaseUrl: String): Map<String, String> {
++    private fun extractServiceUrls(
++      xml: String,
++      apiBaseUrl: String,
++      descriptorUrl: String,
++    ): Map<String, String> {
+       val entry = Regex(
+         "<(?:[^:>]+:)?X_ScalarWebAPI_Service>(.*?)</(?:[^:>]+:)?X_ScalarWebAPI_Service>",
+         RegexOption.DOT_MATCHES_ALL,
+@@ -94,13 +108,34 @@ internal class SonyScalarWebApiTransport private constructor(
+       entry.findAll(xml).forEach { match ->
+         val block = match.groupValues[1]
+         val type = extract(block, "X_ScalarWebAPI_ServiceType") ?: return@forEach
+-        val url = extract(block, "X_ScalarWebAPI_ActionList_URL") ?: apiBaseUrl
++        val url = extract(block, "X_ScalarWebAPI_ActionList_URL")
++          ?.let { resolveEndpoint(descriptorUrl, it) }
++          ?: apiBaseUrl
+         services[type] = url.trimEnd('/') + "/" + type
+       }
+       if (services.isEmpty()) services["camera"] = apiBaseUrl.trimEnd('/') + "/camera"
+       return services
+     }
+ 
++    /** Accepts Sony descriptor endpoints in absolute, scheme-relative, or relative form. */
++    private fun resolveEndpoint(descriptorUrl: String, rawValue: String): String {
++      val value = rawValue.trim()
++      if (value.isEmpty()) throw SonyPtpException("Sony descriptor returned an empty endpoint URL.")
++      val base = URL(descriptorUrl)
++      return try {
++        when {
++          value.startsWith("//") -> URL("${base.protocol}:$value").toString()
++          value.matches(Regex("^[0-9.]+:[0-9]+(?:/.*)?$")) ->
++            URL("${base.protocol}://$value").toString()
++          else -> URL(base, value).toString()
++        }
++      } catch (error: Throwable) {
++        throw SonyPtpException(
++          "Sony descriptor returned an invalid endpoint URL: $value (${error.message ?: error::class.java.simpleName})",
++        )
++      }
++    }
++
+     private fun extract(xml: String, tag: String): String? {
+       val pattern = Regex("<(?:[^:>]+:)?${Regex.escape(tag)}[^>]*>(.*?)</(?:[^:>]+:)?${Regex.escape(tag)}>", RegexOption.DOT_MATCHES_ALL)
+       return pattern.find(xml)?.groupValues?.getOrNull(1)?.trim()?.takeIf(String::isNotEmpty)
+@@ -149,6 +184,7 @@ internal class SonyScalarWebApiTransport private constructor(
  
      if (availableApis.isEmpty()) throw SonyPtpException("Sony camera returned no available remote APIs.")
      trace("Scalar ready APIs=${availableApis.size}")
@@ -288,7 +345,7 @@ index e97326d..332c2ff 100644
    }
  
    private fun refreshAvailableApis() {
-@@ -177,12 +184,35 @@ internal class SonyScalarWebApiTransport private constructor(
+@@ -177,12 +213,35 @@ internal class SonyScalarWebApiTransport private constructor(
  
    fun startLiveView() {
      closeLiveStream()
