@@ -192,8 +192,18 @@ export default function App() {
         onPanResponderMove: (event, gesture) => {
           const touches = event.nativeEvent.touches;
           const session = gestureRef.current;
-          if (touches.length >= 2 && session.initialDistance > 0) {
+          if (touches.length >= 2) {
             const distance = touchDistance(touches);
+            // Android normally grants the responder to the first finger. Initialise the
+            // pinch baseline when the second finger actually arrives, not only at grant.
+            if (session.initialTouchCount < 2 || session.initialDistance <= 0) {
+              session.initialTouchCount = 2;
+              session.initialDistance = distance;
+              session.initialZoom = previewZoomRef.current;
+              session.initialPan = previewPanRef.current;
+              session.moved = true;
+              return;
+            }
             const zoom = clamp(
               session.initialZoom * (distance / session.initialDistance),
               1,
@@ -460,6 +470,25 @@ export default function App() {
             </View>
           </View>
         ) : null}
+
+        {streaming ? (
+          <View style={styles.zoomControls}>
+            <Pressable
+              accessibilityLabel="Dézoomer"
+              accessibilityRole="button"
+              onPress={() => updatePreviewZoom(previewZoomRef.current - 1)}
+              style={({ pressed }) => [styles.zoomControlButton, pressed && styles.pressedButton]}>
+              <Text style={styles.zoomControlText}>−</Text>
+            </Pressable>
+            <Pressable
+              accessibilityLabel="Zoomer"
+              accessibilityRole="button"
+              onPress={() => updatePreviewZoom(previewZoomRef.current + 1)}
+              style={({ pressed }) => [styles.zoomControlButton, pressed && styles.pressedButton]}>
+              <Text style={styles.zoomControlText}>+</Text>
+            </Pressable>
+          </View>
+        ) : null}
       </View>
 
       <View style={styles.controlColumn}>
@@ -690,6 +719,30 @@ const styles = StyleSheet.create({
     fontFamily: 'monospace',
     fontSize: 13,
     fontWeight: '800',
+  },
+  zoomControls: {
+    position: 'absolute',
+    right: 18,
+    bottom: 18,
+    zIndex: 5,
+    flexDirection: 'row',
+    gap: 8,
+  },
+  zoomControlButton: {
+    width: 46,
+    height: 46,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 23,
+    backgroundColor: 'rgba(9, 14, 21, 0.88)',
+    borderWidth: 1,
+    borderColor: '#4a5f78',
+  },
+  zoomControlText: {
+    color: '#f4c95d',
+    fontSize: 28,
+    fontWeight: '500',
+    lineHeight: 31,
   },
   starTarget: {
     position: 'absolute',
