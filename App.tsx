@@ -1,8 +1,9 @@
 import SonyCamera, { SonyCameraView } from 'expo-sony-camera';
 import type { SonyCameraState } from 'expo-sony-camera';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  PanResponder,
   Pressable,
   SafeAreaView,
   ScrollView,
@@ -18,6 +19,29 @@ type DiagnosticRoute = {
   protocol?: string;
   transport?: string;
 };
+
+type Point = { x: number; y: number };
+type PreviewSize = { width: number; height: number };
+
+const MAX_PREVIEW_ZOOM = 10;
+
+function clamp(value: number, minimum: number, maximum: number) {
+  return Math.min(maximum, Math.max(minimum, value));
+}
+
+function touchDistance(touches: readonly { pageX: number; pageY: number }[]) {
+  if (touches.length < 2) return 0;
+  return Math.hypot(touches[0].pageX - touches[1].pageX, touches[0].pageY - touches[1].pageY);
+}
+
+function boundedPan(point: Point, scale: number, size: PreviewSize): Point {
+  const maximumX = Math.max(0, (size.width * (scale - 1)) / 2);
+  const maximumY = Math.max(0, (size.height * (scale - 1)) / 2);
+  return {
+    x: clamp(point.x, -maximumX, maximumX),
+    y: clamp(point.y, -maximumY, maximumY),
+  };
+}
 
 const connectedStates: SonyCameraState['state'][] = [
   'ready',
@@ -82,12 +106,127 @@ export default function App() {
     const snapshot = camera.getDiagnostics();
     return { protocol: snapshot.protocol, transport: snapshot.transport };
   });
+  const [previewSize, setPreviewSize] = useState<PreviewSize>({ width: 0, height: 0 });
+  const [previewZoom, setPreviewZoom] = useState(1);
+  const [previewPan, setPreviewPan] = useState<Point>({ x: 0, y: 0 });
+  const [selectedStar, setSelectedStar] = useState<Point | null>(null);
+  const previewSizeRef = useRef(previewSize);
+  const previewZoomRef = useRef(previewZoom);
+  const previewPanRef = useRef(previewPan);
+  const gestureRef = useRef({
+    startedAt: 0,
+    initialTouchCount: 0,
+    initialDistance: 0,
+    initialZoom: 1,
+    initialPan: { x: 0, y: 0 },
+    moved: false,
+  });
 
   const stateName = cameraState?.state ?? 'unsupported';
   const connected = connectedStates.includes(stateName);
   const connecting = connectionStates.includes(stateName);
   const streaming = stateName === 'streaming';
   const busy = operation !== null;
+
+  function updatePreviewZoom(next: number) {
+    const zoom = clamp(next, 1, MAX_PREVIEW_ZOOM);
+    previewZoomRef.current = zoom;
+    setPreviewZoom(zoom);
+    const pan = boundedPan(previewPanRef.current, zoom, previewSizeRef.current);
+    previewPanRef.current = pan;
+    setPreviewPan(pan);
+  }
+
+  function updatePreviewPan(next: Point) {
+    const pan = boundedPan(next, previewZoomRef.current, previewSizeRef.current);
+    previewPanRef.current = pan;
+    setPreviewPan(pan);
+  }
+
+  function resetPreviewNavigation() {
+    previewZoomRef.current = 1;
+    previewPanRef.current = { x: 0, y: 0 };
+    setPreviewZoom(1);
+    setPreviewPan({ x: 0, y: 0 });
+    setSelectedStar(null);
+  }
+
+  function selectStarAt(screenX: number, screenY: number) {
+    const size = previewSizeRef.current;
+    if (size.width <= 0 || size.height <= 0) return;
+    const zoom = previewZoomRef.current;
+    const pan = previewPanRef.current;
+    const imageX = (screenX - size.width / 2 - pan.x) / zoom + size.width / 2;
+    const imageY = (screenY - size.height / 2 - pan.y) / zoom + size.height / 2;
+    setSelectedStar({
+      x: clamp(imageX / size.width, 0, 1),
+      y: clamp(imageY / size.height, 0, 1),
+    });
+  }
+
+  const previewResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => streaming,
+        onMoveShouldSetPanResponder: () => streaming,
+        onPanResponderGrant: (event) => {
+          const touches = event.nativeEvent.touches;
+          gestureRef.current = {
+            startedAt: Date.now(),
+            initialTouchCount: touches.length,
+            initialDistance: touchDistance(touches),
+            initialZoom: previewZoomRef.current,
+            initialPan: previewPanRef.current,
+            moved: false,
+          };
+        },
+        onPanResponderMove: (event, gesture) => {
+          const touches = event.nativeEvent.touches;
+          const session = gestureRef.current;
+          if (touches.length >= 2 && session.initialDistance > 0) {
+            const distance = touchDistance(touches);
+            const zoom = clamp(
+              session.initialZoom * (distance / session.initialDistance),
+              1,
+              MAX_PREVIEW_ZOOM
+            );
+            if (Math.abs(zoom - session.initialZoom) > 0.015) session.moved = true;
+            updatePreviewZoom(zoom);
+          } else if (session.initialTouchCount === 1 && previewZoomRef.current > 1) {
+            if (Math.hypot(gesture.dx, gesture.dy) > 5) session.moved = true;
+            updatePreviewPan({
+              x: session.initialPan.x + gesture.dx,
+              y: session.initialPan.y + gesture.dy,
+            });
+          }
+        },
+        onPanResponderRelease: (event, gesture) => {
+          const session = gestureRef.current;
+          const wasTap =
+            session.initialTouchCount === 1 &&
+            !session.moved &&
+            Math.hypot(gesture.dx, gesture.dy) < 6 &&
+            Date.now() - session.startedAt < 500;
+          if (wasTap) selectStarAt(event.nativeEvent.locationX, event.nativeEvent.locationY);
+        },
+        onPanResponderTerminationRequest: () => false,
+      }),
+    [streaming]
+  );
+
+  const selectedStarScreen = useMemo(() => {
+    if (!selectedStar || previewSize.width <= 0 || previewSize.height <= 0) return null;
+    return {
+      x:
+        (selectedStar.x * previewSize.width - previewSize.width / 2) * previewZoom +
+        previewSize.width / 2 +
+        previewPan.x,
+      y:
+        (selectedStar.y * previewSize.height - previewSize.height / 2) * previewZoom +
+        previewSize.height / 2 +
+        previewPan.y,
+    };
+  }, [previewPan, previewSize, previewZoom, selectedStar]);
 
   const statusColor = useMemo(() => {
     if (stateName === 'streaming') return '#54e397';
@@ -175,8 +314,29 @@ export default function App() {
     <SafeAreaView style={styles.page}>
       <StatusBar hidden />
 
-      <View style={styles.previewColumn}>
-        <SonyCameraView active={streaming} style={StyleSheet.absoluteFill} />
+      <View
+        style={styles.previewColumn}
+        onLayout={(event) => {
+          const next = {
+            width: event.nativeEvent.layout.width,
+            height: event.nativeEvent.layout.height,
+          };
+          previewSizeRef.current = next;
+          setPreviewSize(next);
+          updatePreviewPan(previewPanRef.current);
+        }}>
+        <View
+          pointerEvents="none"
+          style={[
+            StyleSheet.absoluteFill,
+            {
+              transform: [{ translateX: previewPan.x }, { translateY: previewPan.y }],
+            },
+          ]}>
+          <View style={[StyleSheet.absoluteFill, { transform: [{ scale: previewZoom }] }]}>
+            <SonyCameraView active={streaming} style={StyleSheet.absoluteFill} />
+          </View>
+        </View>
 
         {!streaming ? (
           <View style={styles.previewPlaceholder} pointerEvents="none">
@@ -192,6 +352,38 @@ export default function App() {
           <View style={[styles.statusDot, { backgroundColor: statusColor }]} />
           <Text style={styles.stateText}>{stateName}</Text>
         </View>
+
+        {streaming ? (
+          <View style={styles.previewGestureLayer} {...previewResponder.panHandlers}>
+            {!selectedStar ? (
+              <View style={styles.selectionHint} pointerEvents="none">
+                <Text style={styles.selectionHintText}>
+                  Pincer pour zoomer · Glisser pour déplacer · Toucher une étoile
+                </Text>
+              </View>
+            ) : null}
+
+            {selectedStarScreen ? (
+              <View
+                pointerEvents="none"
+                style={[
+                  styles.starTarget,
+                  {
+                    left: selectedStarScreen.x - 18,
+                    top: selectedStarScreen.y - 18,
+                  },
+                ]}>
+                <View style={styles.starTargetCircle} />
+                <View style={styles.starTargetHorizontal} />
+                <View style={styles.starTargetVertical} />
+              </View>
+            ) : null}
+
+            <View style={styles.zoomBadge} pointerEvents="none">
+              <Text style={styles.zoomBadgeText}>×{previewZoom.toFixed(1)}</Text>
+            </View>
+          </View>
+        ) : null}
       </View>
 
       <View style={styles.controlColumn}>
@@ -203,6 +395,7 @@ export default function App() {
             <Text style={styles.step}>1. Sony : ouvrir Smart Remote Control.</Text>
             <Text style={styles.step}>2. Android : rejoindre le Wi-Fi affiché par le Sony.</Text>
             <Text style={styles.step}>3. Appuyer sur Connexion, puis Démarrer Live View.</Text>
+            <Text style={styles.step}>4. Pincer l’image pour zoomer, puis toucher l’étoile.</Text>
           </View>
 
           {operation ? (
@@ -224,6 +417,23 @@ export default function App() {
             {'\n'}
             Transport : {diagnosticRoute.transport ?? cameraState?.device?.transport ?? 'en attente'}
           </Text>
+
+          {streaming ? (
+            <View style={styles.selectionPanel}>
+              <Text style={styles.selectionTitle}>Sélection de l’étoile</Text>
+              <Text style={styles.selectionStatus}>
+                Zoom ×{previewZoom.toFixed(1)} ·{' '}
+                {selectedStar
+                  ? `position ${(selectedStar.x * 100).toFixed(1)} %, ${(selectedStar.y * 100).toFixed(1)} %`
+                  : 'aucune étoile sélectionnée'}
+              </Text>
+              <ActionButton
+                title="Réinitialiser zoom et sélection"
+                onPress={resetPreviewNavigation}
+                disabled={previewZoom === 1 && selectedStar === null}
+              />
+            </View>
+          ) : null}
 
           {lastError ? (
             <Text selectable style={styles.error}>
@@ -350,6 +560,73 @@ const styles = StyleSheet.create({
     fontFamily: 'monospace',
     fontSize: 13,
   },
+  previewGestureLayer: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+  },
+  selectionHint: {
+    position: 'absolute',
+    left: 24,
+    right: 24,
+    bottom: 22,
+    alignItems: 'center',
+  },
+  selectionHintText: {
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+    borderRadius: 16,
+    overflow: 'hidden',
+    color: '#f3f6fa',
+    backgroundColor: 'rgba(9, 14, 21, 0.82)',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  zoomBadge: {
+    position: 'absolute',
+    top: 18,
+    right: 18,
+    minWidth: 54,
+    alignItems: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 16,
+    backgroundColor: 'rgba(9, 14, 21, 0.82)',
+  },
+  zoomBadgeText: {
+    color: '#f4c95d',
+    fontFamily: 'monospace',
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  starTarget: {
+    position: 'absolute',
+    width: 36,
+    height: 36,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  starTargetCircle: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    borderWidth: 2,
+    borderColor: '#f4c95d',
+  },
+  starTargetHorizontal: {
+    position: 'absolute',
+    width: 36,
+    height: 1,
+    backgroundColor: '#f4c95d',
+  },
+  starTargetVertical: {
+    position: 'absolute',
+    width: 1,
+    height: 36,
+    backgroundColor: '#f4c95d',
+  },
   controlColumn: {
     flex: 1,
     maxWidth: 560,
@@ -404,6 +681,25 @@ const styles = StyleSheet.create({
     fontFamily: 'monospace',
     fontSize: 11,
     lineHeight: 17,
+  },
+  selectionPanel: {
+    gap: 9,
+    padding: 12,
+    borderRadius: 9,
+    borderWidth: 1,
+    borderColor: '#2f4e78',
+    backgroundColor: '#101925',
+  },
+  selectionTitle: {
+    color: '#f3f6fa',
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  selectionStatus: {
+    color: '#9fb6d2',
+    fontFamily: 'monospace',
+    fontSize: 11,
+    lineHeight: 16,
   },
   error: {
     padding: 10,
