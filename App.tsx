@@ -1,5 +1,5 @@
 import SonyCamera, { SonyCameraView } from 'expo-sony-camera';
-import type { SonyCameraState } from 'expo-sony-camera';
+import type { SonyCameraState, SonyStarTrackingSample } from 'expo-sony-camera';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -110,6 +110,8 @@ export default function App() {
   const [previewZoom, setPreviewZoom] = useState(1);
   const [previewPan, setPreviewPan] = useState<Point>({ x: 0, y: 0 });
   const [selectedStar, setSelectedStar] = useState<Point | null>(null);
+  const [trackingSample, setTrackingSample] = useState<SonyStarTrackingSample | null>(null);
+  const [trackingTrail, setTrackingTrail] = useState<Point[]>([]);
   const previewSizeRef = useRef(previewSize);
   const previewZoomRef = useRef(previewZoom);
   const previewPanRef = useRef(previewPan);
@@ -149,6 +151,9 @@ export default function App() {
     setPreviewZoom(1);
     setPreviewPan({ x: 0, y: 0 });
     setSelectedStar(null);
+    setTrackingSample(null);
+    setTrackingTrail([]);
+    camera?.clearStarTracking?.();
   }
 
   function selectStarAt(screenX: number, screenY: number) {
@@ -158,10 +163,14 @@ export default function App() {
     const pan = previewPanRef.current;
     const imageX = (screenX - size.width / 2 - pan.x) / zoom + size.width / 2;
     const imageY = (screenY - size.height / 2 - pan.y) / zoom + size.height / 2;
-    setSelectedStar({
+    const point = {
       x: clamp(imageX / size.width, 0, 1),
       y: clamp(imageY / size.height, 0, 1),
-    });
+    };
+    setSelectedStar(point);
+    setTrackingSample(null);
+    setTrackingTrail([]);
+    camera?.setStarTrackingPoint?.(point.x, point.y, size.width, size.height);
   }
 
   const previewResponder = useMemo(
@@ -228,6 +237,29 @@ export default function App() {
     };
   }, [previewPan, previewSize, previewZoom, selectedStar]);
 
+  function pointToScreen(point: Point): Point {
+    return {
+      x:
+        (point.x * previewSize.width - previewSize.width / 2) * previewZoom +
+        previewSize.width / 2 +
+        previewPan.x,
+      y:
+        (point.y * previewSize.height - previewSize.height / 2) * previewZoom +
+        previewSize.height / 2 +
+        previewPan.y,
+    };
+  }
+
+  const trackedStarScreen = useMemo(
+    () => (trackingSample ? pointToScreen({ x: trackingSample.x, y: trackingSample.y }) : null),
+    [previewPan, previewSize, previewZoom, trackingSample]
+  );
+
+  const trailOnScreen = useMemo(
+    () => trackingTrail.map(pointToScreen),
+    [previewPan, previewSize, previewZoom, trackingTrail]
+  );
+
   const statusColor = useMemo(() => {
     if (stateName === 'streaming') return '#54e397';
     if (stateName === 'ready') return '#65b8ff';
@@ -253,8 +285,17 @@ export default function App() {
       setCameraState(nextState);
       refreshDiagnostics();
     });
+    const trackingSubscription = camera.addListener('onStarTracked', (sample) => {
+      setTrackingSample(sample);
+      if (sample.locked) {
+        setTrackingTrail((trail) => [...trail, { x: sample.x, y: sample.y }].slice(-40));
+      }
+    });
 
-    return () => subscription.remove();
+    return () => {
+      subscription.remove();
+      trackingSubscription.remove();
+    };
   }, [camera]);
 
   async function run(name: Operation, task: () => Promise<SonyCameraState>) {
@@ -367,13 +408,48 @@ export default function App() {
               <View
                 pointerEvents="none"
                 style={[
-                  styles.starTarget,
+                  styles.referenceTarget,
                   {
-                    left: selectedStarScreen.x - 18,
-                    top: selectedStarScreen.y - 18,
+                    left: selectedStarScreen.x - 8,
+                    top: selectedStarScreen.y - 8,
                   },
                 ]}>
-                <View style={styles.starTargetCircle} />
+                <View style={styles.referenceTargetHorizontal} />
+                <View style={styles.referenceTargetVertical} />
+              </View>
+            ) : null}
+
+            {trailOnScreen.map((point, index) => (
+              <View
+                key={index}
+                pointerEvents="none"
+                style={[
+                  styles.trailPoint,
+                  {
+                    left: point.x - 2,
+                    top: point.y - 2,
+                    opacity: (index + 1) / trailOnScreen.length,
+                  },
+                ]}
+              />
+            ))}
+
+            {trackedStarScreen ? (
+              <View
+                pointerEvents="none"
+                style={[
+                  styles.starTarget,
+                  {
+                    left: trackedStarScreen.x - 18,
+                    top: trackedStarScreen.y - 18,
+                  },
+                ]}>
+                <View
+                  style={[
+                    styles.starTargetCircle,
+                    !trackingSample?.locked && styles.starTargetCircleLost,
+                  ]}
+                />
                 <View style={styles.starTargetHorizontal} />
                 <View style={styles.starTargetVertical} />
               </View>
@@ -427,6 +503,20 @@ export default function App() {
                   ? `position ${(selectedStar.x * 100).toFixed(1)} %, ${(selectedStar.y * 100).toFixed(1)} %`
                   : 'aucune étoile sélectionnée'}
               </Text>
+              {trackingSample ? (
+                <Text
+                  style={[
+                    styles.trackingStatus,
+                    !trackingSample.locked && styles.trackingStatusLost,
+                  ]}>
+                  {trackingSample.locked ? 'ÉTOILE VERROUILLÉE' : 'ÉTOILE PERDUE'} · dx{' '}
+                  {trackingSample.dxPixels.toFixed(2)} px · dy {trackingSample.dyPixels.toFixed(2)} px
+                  {'\n'}Image {trackingSample.frameWidth}×{trackingSample.frameHeight} · contraste{' '}
+                  {trackingSample.contrast.toFixed(1)} · bruit {trackingSample.noise.toFixed(1)}
+                </Text>
+              ) : selectedStar ? (
+                <Text style={styles.trackingStatus}>Recherche de l’étoile…</Text>
+              ) : null}
               <ActionButton
                 title="Réinitialiser zoom et sélection"
                 onPress={resetPreviewNavigation}
@@ -613,19 +703,48 @@ const styles = StyleSheet.create({
     height: 22,
     borderRadius: 11,
     borderWidth: 2,
-    borderColor: '#f4c95d',
+    borderColor: '#54e397',
+  },
+  starTargetCircleLost: {
+    borderColor: '#ff6b6b',
   },
   starTargetHorizontal: {
     position: 'absolute',
     width: 36,
     height: 1,
-    backgroundColor: '#f4c95d',
+    backgroundColor: '#54e397',
   },
   starTargetVertical: {
     position: 'absolute',
     width: 1,
     height: 36,
+    backgroundColor: '#54e397',
+  },
+  referenceTarget: {
+    position: 'absolute',
+    width: 16,
+    height: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  referenceTargetHorizontal: {
+    position: 'absolute',
+    width: 16,
+    height: 1,
     backgroundColor: '#f4c95d',
+  },
+  referenceTargetVertical: {
+    position: 'absolute',
+    width: 1,
+    height: 16,
+    backgroundColor: '#f4c95d',
+  },
+  trailPoint: {
+    position: 'absolute',
+    width: 4,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: '#65b8ff',
   },
   controlColumn: {
     flex: 1,
@@ -700,6 +819,15 @@ const styles = StyleSheet.create({
     fontFamily: 'monospace',
     fontSize: 11,
     lineHeight: 16,
+  },
+  trackingStatus: {
+    color: '#54e397',
+    fontFamily: 'monospace',
+    fontSize: 11,
+    lineHeight: 17,
+  },
+  trackingStatusLost: {
+    color: '#ff8a8a',
   },
   error: {
     padding: 10,

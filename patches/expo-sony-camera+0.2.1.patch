@@ -1,5 +1,260 @@
+diff --git a/node_modules/expo-sony-camera/android/src/main/java/expo/modules/sonycamera/SonyCameraController.kt b/node_modules/expo-sony-camera/android/src/main/java/expo/modules/sonycamera/SonyCameraController.kt
+index 18b5959..2680983 100644
+--- a/node_modules/expo-sony-camera/android/src/main/java/expo/modules/sonycamera/SonyCameraController.kt
++++ b/node_modules/expo-sony-camera/android/src/main/java/expo/modules/sonycamera/SonyCameraController.kt
+@@ -398,7 +398,7 @@ internal class SonyCameraController(private val context: Context) {
+               BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size, bounds)
+               liveViewWidth = bounds.outWidth
+               liveViewHeight = bounds.outHeight
+-              trace("first live-view JPEG received bytes=${jpeg.size}")
++              trace("first live-view JPEG received size=${liveViewWidth}x${liveViewHeight} bytes=${jpeg.size}")
+               listeners.forEach { it.onStateChanged(statePayload()) }
+             }
+             lastFrameJpeg = jpeg
+diff --git a/node_modules/expo-sony-camera/android/src/main/java/expo/modules/sonycamera/SonyCameraModule.kt b/node_modules/expo-sony-camera/android/src/main/java/expo/modules/sonycamera/SonyCameraModule.kt
+index 015b9a8..f0cae00 100644
+--- a/node_modules/expo-sony-camera/android/src/main/java/expo/modules/sonycamera/SonyCameraModule.kt
++++ b/node_modules/expo-sony-camera/android/src/main/java/expo/modules/sonycamera/SonyCameraModule.kt
+@@ -1,16 +1,38 @@
+ package expo.modules.sonycamera
+ 
+ import android.content.Intent
++import android.graphics.BitmapFactory
++import android.os.SystemClock
+ import expo.modules.kotlin.modules.Module
+ import expo.modules.kotlin.modules.ModuleDefinition
++import java.util.concurrent.Executors
++import java.util.concurrent.atomic.AtomicBoolean
+ 
+ class SonyCameraModule : Module(), SonyCameraController.Listener {
+   private lateinit var controller: SonyCameraController
++  private val trackingExecutor = Executors.newSingleThreadExecutor { runnable ->
++    Thread(runnable, "ExpoSonyStarTracking").apply { isDaemon = true }
++  }
++  private val trackingFramePending = AtomicBoolean(false)
++  private val trackingLock = Any()
++  @Volatile private var lastTrackingFrameAt = 0L
++  private var trackingTarget: TrackingTarget? = null
++  private var trackingGeneration = 0L
++
++  private data class TrackingTarget(
++    val generation: Long,
++    val referenceX: Double,
++    val referenceY: Double,
++    var currentX: Double,
++    var currentY: Double,
++    val viewWidth: Double,
++    val viewHeight: Double,
++  )
+ 
+   override fun definition() = ModuleDefinition {
+     Name("SonyCamera")
+ 
+-    Events("onStateChanged", "onDeviceAttached", "onPhotoCaptured")
++    Events("onStateChanged", "onDeviceAttached", "onPhotoCaptured", "onStarTracked")
+ 
+     OnCreate {
+       val context = requireNotNull(appContext.reactContext)
+@@ -27,6 +49,7 @@ class SonyCameraModule : Module(), SonyCameraController.Listener {
+     OnDestroy {
+       controller.removeListener(this@SonyCameraModule)
+       controller.close()
++      trackingExecutor.shutdownNow()
+       if (SonyCameraRegistry.controller === controller) SonyCameraRegistry.controller = null
+     }
+ 
+@@ -48,6 +71,28 @@ class SonyCameraModule : Module(), SonyCameraController.Listener {
+     AsyncFunction("focusAt") { x: Double, y: Double, viewWidth: Double, viewHeight: Double ->
+       controller.focusAtBlocking(x, y, viewWidth, viewHeight)
+     }
++    Function("setStarTrackingPoint") { x: Double, y: Double, viewWidth: Double, viewHeight: Double ->
++      require(viewWidth > 0.0 && viewHeight > 0.0) { "Preview dimensions must be positive." }
++      synchronized(trackingLock) {
++        trackingGeneration += 1
++        trackingTarget = TrackingTarget(
++          generation = trackingGeneration,
++          referenceX = x.coerceIn(0.0, 1.0),
++          referenceY = y.coerceIn(0.0, 1.0),
++          currentX = x.coerceIn(0.0, 1.0),
++          currentY = y.coerceIn(0.0, 1.0),
++          viewWidth = viewWidth,
++          viewHeight = viewHeight,
++        )
++      }
++      lastTrackingFrameAt = 0L
++    }
++    Function("clearStarTracking") {
++      synchronized(trackingLock) {
++        trackingGeneration += 1
++        trackingTarget = null
++      }
++    }
+ 
+     View(SonyCameraView::class) {
+       Prop("active") { view: SonyCameraView, active: Boolean -> view.setActive(active) }
+@@ -67,7 +112,159 @@ class SonyCameraModule : Module(), SonyCameraController.Listener {
+     sendEvent("onPhotoCaptured", payload)
+   }
+ 
+-  override fun onFrame(jpeg: ByteArray) = Unit
++  override fun onFrame(jpeg: ByteArray) {
++    val now = SystemClock.elapsedRealtime()
++    if (now - lastTrackingFrameAt < TRACKING_INTERVAL_MS) return
++    val hasTarget = synchronized(trackingLock) { trackingTarget != null }
++    if (!hasTarget || !trackingFramePending.compareAndSet(false, true)) return
++    lastTrackingFrameAt = now
++    trackingExecutor.execute {
++      try {
++        analyseTrackingFrame(jpeg)
++      } finally {
++        trackingFramePending.set(false)
++      }
++    }
++  }
++
++  private fun analyseTrackingFrame(jpeg: ByteArray) {
++    val bitmap = BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size) ?: return
++    try {
++      val target = synchronized(trackingLock) { trackingTarget?.copy() } ?: return
++      val width = bitmap.width
++      val height = bitmap.height
++      if (width <= 0 || height <= 0) return
++
++      val scale = maxOf(target.viewWidth / width, target.viewHeight / height)
++      val renderedWidth = width * scale
++      val renderedHeight = height * scale
++      val cropX = (renderedWidth - target.viewWidth) / 2.0
++      val cropY = (renderedHeight - target.viewHeight) / 2.0
++      fun viewToImageX(value: Double) = ((value * target.viewWidth + cropX) / scale).coerceIn(0.0, width - 1.0)
++      fun viewToImageY(value: Double) = ((value * target.viewHeight + cropY) / scale).coerceIn(0.0, height - 1.0)
++
++      val centerX = viewToImageX(target.currentX)
++      val centerY = viewToImageY(target.currentY)
++      val radius = maxOf(24, minOf(width, height) / 10)
++      val left = maxOf(0, centerX.toInt() - radius)
++      val right = minOf(width - 1, centerX.toInt() + radius)
++      val top = maxOf(0, centerY.toInt() - radius)
++      val bottom = minOf(height - 1, centerY.toInt() + radius)
++
++      var luminanceSum = 0.0
++      var luminanceSquaredSum = 0.0
++      var sampleCount = 0
++      for (py in top..bottom step 2) {
++        for (px in left..right step 2) {
++          val pixel = bitmap.getPixel(px, py)
++          val red = (pixel shr 16) and 0xff
++          val green = (pixel shr 8) and 0xff
++          val blue = pixel and 0xff
++          val luminance = 0.2126 * red + 0.7152 * green + 0.0722 * blue
++          luminanceSum += luminance
++          luminanceSquaredSum += luminance * luminance
++          sampleCount += 1
++        }
++      }
++      if (sampleCount == 0) return
++      val background = luminanceSum / sampleCount
++      val variance = maxOf(0.0, luminanceSquaredSum / sampleCount - background * background)
++      val noise = kotlin.math.sqrt(variance)
++      // Prefer the bright source closest to the user's tap/current centroid. This avoids
++      // jumping to another, brighter star elsewhere in the search window.
++      val attractionSigma = maxOf(8.0, radius / 3.0)
++      var peakX = centerX.toInt()
++      var peakY = centerY.toInt()
++      var peakLuminance = background
++      var peakScore = Double.NEGATIVE_INFINITY
++      for (py in top..bottom) {
++        for (px in left..right) {
++          val pixel = bitmap.getPixel(px, py)
++          val red = (pixel shr 16) and 0xff
++          val green = (pixel shr 8) and 0xff
++          val blue = pixel and 0xff
++          val luminance = 0.2126 * red + 0.7152 * green + 0.0722 * blue
++          val dx = px - centerX
++          val dy = py - centerY
++          val proximity = kotlin.math.exp(-(dx * dx + dy * dy) / (2.0 * attractionSigma * attractionSigma))
++          val score = (luminance - background) * proximity
++          if (score > peakScore) {
++            peakScore = score
++            peakLuminance = luminance
++            peakX = px
++            peakY = py
++          }
++        }
++      }
++      val contrast = peakLuminance - background
++      val threshold = background + maxOf(8.0, contrast * 0.35)
++      val locked = contrast >= maxOf(12.0, noise * 2.0)
++
++      var weightSum = 0.0
++      var weightedX = 0.0
++      var weightedY = 0.0
++      if (locked) {
++        val centroidRadius = maxOf(5, minOf(width, height) / 60)
++        val centroidLeft = maxOf(0, peakX - centroidRadius)
++        val centroidRight = minOf(width - 1, peakX + centroidRadius)
++        val centroidTop = maxOf(0, peakY - centroidRadius)
++        val centroidBottom = minOf(height - 1, peakY + centroidRadius)
++        for (py in centroidTop..centroidBottom) {
++          for (px in centroidLeft..centroidRight) {
++            val pixel = bitmap.getPixel(px, py)
++            val red = (pixel shr 16) and 0xff
++            val green = (pixel shr 8) and 0xff
++            val blue = pixel and 0xff
++            val luminance = 0.2126 * red + 0.7152 * green + 0.0722 * blue
++            val weight = maxOf(0.0, luminance - threshold)
++            weightSum += weight
++            weightedX += px * weight
++            weightedY += py * weight
++          }
++        }
++      }
++
++      val foundX = if (weightSum > 0.0) weightedX / weightSum else centerX
++      val foundY = if (weightSum > 0.0) weightedY / weightSum else centerY
++      val imageReferenceX = viewToImageX(target.referenceX)
++      val imageReferenceY = viewToImageY(target.referenceY)
++      val viewX = ((foundX * scale - cropX) / target.viewWidth).coerceIn(0.0, 1.0)
++      val viewY = ((foundY * scale - cropY) / target.viewHeight).coerceIn(0.0, 1.0)
++      val stillCurrent = synchronized(trackingLock) {
++        trackingTarget?.generation == target.generation
++      }
++      if (!stillCurrent) return
++      if (locked && weightSum > 0.0) {
++        synchronized(trackingLock) {
++          trackingTarget?.takeIf { it.generation == target.generation }?.let {
++            it.currentX = viewX
++            it.currentY = viewY
++          }
++        }
++      }
++      sendEvent(
++        "onStarTracked",
++        mapOf(
++          "locked" to (locked && weightSum > 0.0),
++          "x" to viewX,
++          "y" to viewY,
++          "dxPixels" to (foundX - imageReferenceX),
++          "dyPixels" to (foundY - imageReferenceY),
++          "contrast" to contrast,
++          "noise" to noise,
++          "frameWidth" to width,
++          "frameHeight" to height,
++          "timestamp" to System.currentTimeMillis().toDouble(),
++        ),
++      )
++    } finally {
++      bitmap.recycle()
++    }
++  }
++
++  companion object {
++    private const val TRACKING_INTERVAL_MS = 200L
++  }
+ }
+ 
+ internal object SonyCameraRegistry {
 diff --git a/node_modules/expo-sony-camera/android/src/main/java/expo/modules/sonycamera/SonyScalarWebApiTransport.kt b/node_modules/expo-sony-camera/android/src/main/java/expo/modules/sonycamera/SonyScalarWebApiTransport.kt
-index e97326d..cab284a 100644
+index e97326d..332c2ff 100644
 --- a/node_modules/expo-sony-camera/android/src/main/java/expo/modules/sonycamera/SonyScalarWebApiTransport.kt
 +++ b/node_modules/expo-sony-camera/android/src/main/java/expo/modules/sonycamera/SonyScalarWebApiTransport.kt
 @@ -50,13 +50,19 @@ internal class SonyScalarWebApiTransport private constructor(
@@ -25,15 +280,139 @@ index e97326d..cab284a 100644
            )
            return SonyScalarWebApiTransport(
              Descriptor(host, descriptorUrl, apiBaseUrl, liveViewUrl, modelName, serviceUrls),
-@@ -181,7 +187,10 @@ internal class SonyScalarWebApiTransport private constructor(
-       call("startLiveview").optJSONArray("result")?.optString(0)?.takeIf(String::isNotBlank)
-         ?: throw SonyPtpException("Sony did not return an active live-view URL.")
-     } else {
+@@ -149,6 +155,7 @@ internal class SonyScalarWebApiTransport private constructor(
+ 
+     if (availableApis.isEmpty()) throw SonyPtpException("Sony camera returned no available remote APIs.")
+     trace("Scalar ready APIs=${availableApis.size}")
++    trace("Scalar API list=${availableApis.sorted().joinToString(",")}")
+   }
+ 
+   private fun refreshAvailableApis() {
+@@ -177,12 +184,35 @@ internal class SonyScalarWebApiTransport private constructor(
+ 
+   fun startLiveView() {
+     closeLiveStream()
+-    val activeLiveViewUrl = if (availableApis.contains("startLiveview")) {
+-      call("startLiveview").optJSONArray("result")?.optString(0)?.takeIf(String::isNotBlank)
+-        ?: throw SonyPtpException("Sony did not return an active live-view URL.")
+-    } else {
 -      descriptor.liveViewUrl
-+      descriptor.liveViewUrl.takeIf(String::isNotBlank)
-+        ?: throw SonyPtpException(
-+          "Sony camera advertises neither startLiveview nor a descriptor live-view URL.",
-+        )
++    val response = when {
++      availableApis.contains("startLiveviewWithSize") -> {
++        // In Sony's legacy Scalar API, M is the highest live-view size (XGA scale),
++        // despite the counter-intuitive name. Some app/body combinations advertise the
++        // method but reject M, so keep the proven startLiveview path as a safe fallback.
++        runCatching {
++          call("startLiveviewWithSize", JSONArray().put("M"))
++        }.onSuccess {
++          trace("Scalar live-view quality requested size=M (maximum)")
++        }.getOrElse { error ->
++          trace("Scalar maximum live-view request failed; using default: ${error.message ?: "unknown"}")
++          if (!availableApis.contains("startLiveview")) throw error
++          call("startLiveview")
++        }
++      }
++      availableApis.contains("startLiveview") -> {
++        trace("Scalar live-view quality fixed by camera (startLiveview only)")
++        call("startLiveview")
++      }
++      else -> null
      }
++    val activeLiveViewUrl = response
++      ?.optJSONArray("result")
++      ?.optString(0)
++      ?.takeIf(String::isNotBlank)
++      ?: descriptor.liveViewUrl.takeIf(String::isNotBlank)
++      ?: throw SonyPtpException(
++        "Sony camera advertises neither a live-view start method nor a descriptor live-view URL.",
++      )
      val connection = network.open(activeLiveViewUrl).apply {
        requestMethod = "GET"
+       connectTimeout = 3_000
+diff --git a/node_modules/expo-sony-camera/build/SonyCamera.types.d.ts b/node_modules/expo-sony-camera/build/SonyCamera.types.d.ts
+index ad7d34a..6b022f1 100644
+--- a/node_modules/expo-sony-camera/build/SonyCamera.types.d.ts
++++ b/node_modules/expo-sony-camera/build/SonyCamera.types.d.ts
+@@ -113,10 +113,23 @@ export type SonyFocusResult = {
+     status: 'focused' | 'started' | 'failed' | 'unsupported';
+     reason?: string;
+ };
++export type SonyStarTrackingSample = {
++    locked: boolean;
++    x: number;
++    y: number;
++    dxPixels: number;
++    dyPixels: number;
++    contrast: number;
++    noise: number;
++    frameWidth: number;
++    frameHeight: number;
++    timestamp: number;
++};
+ export type SonyCameraModuleEvents = {
+     onStateChanged: (state: SonyCameraState) => void;
+     onDeviceAttached: (state: SonyCameraState) => void;
+     onPhotoCaptured: (photo: SonyPhoto) => void;
++    onStarTracked: (sample: SonyStarTrackingSample) => void;
+ };
+ export type SonyCameraViewProps = {
+     active?: boolean;
+diff --git a/node_modules/expo-sony-camera/build/SonyCameraModule.d.ts b/node_modules/expo-sony-camera/build/SonyCameraModule.d.ts
+index 59bc38f..c73ccb5 100644
+--- a/node_modules/expo-sony-camera/build/SonyCameraModule.d.ts
++++ b/node_modules/expo-sony-camera/build/SonyCameraModule.d.ts
+@@ -16,6 +16,9 @@ declare class SonyCameraNativeModule extends NativeModule<SonyCameraModuleEvents
+     capturePreviewFrame(): Promise<SonyPhoto>;
+     /** Android only, and only when the active ScalarWebAPI camera advertises coordinate focus. */
+     focusAt?(x: number, y: number, viewWidth: number, viewHeight: number): Promise<SonyFocusResult>;
++    /** Select a point in the unzoomed native preview and begin native JPEG centroid tracking. */
++    setStarTrackingPoint?(x: number, y: number, viewWidth: number, viewHeight: number): void;
++    clearStarTracking?(): void;
+     getDiagnostics(): SonyDiagnosticsSnapshot;
+     clearDiagnostics(): void;
+ }
+diff --git a/node_modules/expo-sony-camera/src/SonyCamera.types.ts b/node_modules/expo-sony-camera/src/SonyCamera.types.ts
+index b125ec2..b000410 100644
+--- a/node_modules/expo-sony-camera/src/SonyCamera.types.ts
++++ b/node_modules/expo-sony-camera/src/SonyCamera.types.ts
+@@ -152,11 +152,26 @@ export type SonyFocusResult = {
+   status: 'focused' | 'started' | 'failed' | 'unsupported';
+   reason?: string;
+ };
++export type SonyStarTrackingSample = {
++  locked: boolean;
++  /** Position in the unzoomed native preview, normalized from 0 to 1. */
++  x: number;
++  y: number;
++  /** Offset from the selected reference point in source JPEG pixels. */
++  dxPixels: number;
++  dyPixels: number;
++  contrast: number;
++  noise: number;
++  frameWidth: number;
++  frameHeight: number;
++  timestamp: number;
++};
+ 
+ export type SonyCameraModuleEvents = {
+   onStateChanged: (state: SonyCameraState) => void;
+   onDeviceAttached: (state: SonyCameraState) => void;
+   onPhotoCaptured: (photo: SonyPhoto) => void;
++  onStarTracked: (sample: SonyStarTrackingSample) => void;
+ };
+ 
+ export type SonyCameraViewProps = {
+diff --git a/node_modules/expo-sony-camera/src/SonyCameraModule.ts b/node_modules/expo-sony-camera/src/SonyCameraModule.ts
+index 48a3309..09adead 100644
+--- a/node_modules/expo-sony-camera/src/SonyCameraModule.ts
++++ b/node_modules/expo-sony-camera/src/SonyCameraModule.ts
+@@ -25,6 +25,9 @@ declare class SonyCameraNativeModule extends NativeModule<SonyCameraModuleEvents
+   capturePreviewFrame(): Promise<SonyPhoto>;
+   /** Android only, and only when the active ScalarWebAPI camera advertises coordinate focus. */
+   focusAt?(x: number, y: number, viewWidth: number, viewHeight: number): Promise<SonyFocusResult>;
++  /** Select a point in the unzoomed native preview and begin native JPEG centroid tracking. */
++  setStarTrackingPoint?(x: number, y: number, viewWidth: number, viewHeight: number): void;
++  clearStarTracking?(): void;
+   getDiagnostics(): SonyDiagnosticsSnapshot;
+   clearDiagnostics(): void;
+ }
