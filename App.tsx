@@ -99,28 +99,45 @@ function fitRobustLine(points: Point[], size: PreviewSize): RobustLineFit | null
   let bestCount = 0;
   let bestResidual = Number.POSITIVE_INFINITY;
 
-  // With at most 40 samples, testing every pair is inexpensive and deterministic.
-  for (let first = 0; first < pixels.length - 1; first += 1) {
-    for (let second = first + 1; second < pixels.length; second += 1) {
-      const dx = pixels[second].x - pixels[first].x;
-      const dy = pixels[second].y - pixels[first].y;
-      const length = Math.hypot(dx, dy);
-      if (length < 2) continue;
-      const direction = { x: dx / length, y: dy / length };
-      const distances = pixels.map((point) =>
-        pointLineDistance(point, pixels[first], direction)
-      );
-      const inliers = distances.map((distance) => distance <= consensusThreshold);
-      const count = inliers.filter(Boolean).length;
-      const residual = distances.reduce(
-        (sum, distance, index) => sum + (inliers[index] ? distance : 0),
-        0
-      );
-      if (count > bestCount || (count === bestCount && residual < bestResidual)) {
-        bestInliers = inliers;
-        bestCount = count;
-        bestResidual = residual;
+  const candidatePairs: [number, number][] = [];
+  if (pixels.length <= 40) {
+    for (let first = 0; first < pixels.length - 1; first += 1) {
+      for (let second = first + 1; second < pixels.length; second += 1) {
+        candidatePairs.push([first, second]);
       }
+    }
+  } else {
+    // Bound the work for long drift sessions while retaining deterministic coverage.
+    let seed = pixels.length * 2654435761;
+    for (let trial = 0; trial < 256; trial += 1) {
+      seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+      const first = seed % pixels.length;
+      seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+      let second = seed % pixels.length;
+      if (second === first) second = (second + 1) % pixels.length;
+      candidatePairs.push([Math.min(first, second), Math.max(first, second)]);
+    }
+  }
+
+  for (const [first, second] of candidatePairs) {
+    const dx = pixels[second].x - pixels[first].x;
+    const dy = pixels[second].y - pixels[first].y;
+    const length = Math.hypot(dx, dy);
+    if (length < 2) continue;
+    const direction = { x: dx / length, y: dy / length };
+    const distances = pixels.map((point) =>
+      pointLineDistance(point, pixels[first], direction)
+    );
+    const inliers = distances.map((distance) => distance <= consensusThreshold);
+    const count = inliers.filter(Boolean).length;
+    const residual = distances.reduce(
+      (sum, distance, index) => sum + (inliers[index] ? distance : 0),
+      0
+    );
+    if (count > bestCount || (count === bestCount && residual < bestResidual)) {
+      bestInliers = inliers;
+      bestCount = count;
+      bestResidual = residual;
     }
   }
   if (!bestInliers || bestCount < 4) return null;
@@ -389,10 +406,14 @@ export default function App() {
     [previewPan, previewSize, previewZoom, trackingSample]
   );
 
-  const trailOnScreen = useMemo(
-    () => trackingTrail.map(pointToScreen),
-    [previewPan, previewSize, previewZoom, trackingTrail]
-  );
+  const trailOnScreen = useMemo(() => {
+    const displayStep = Math.max(1, Math.ceil(trackingTrail.length / 120));
+    return trackingTrail
+      .map((point, sourceIndex) => ({ point: pointToScreen(point), sourceIndex }))
+      .filter(
+        (_, index) => index % displayStep === 0 || index === trackingTrail.length - 1
+      );
+  }, [previewPan, previewSize, previewZoom, trackingTrail]);
 
   const robustDriftLine = useMemo(
     () => fitRobustLine(trackingTrail, previewSize),
@@ -440,7 +461,8 @@ export default function App() {
     const trackingSubscription = camera.addListener('onStarTracked', (sample) => {
       setTrackingSample(sample);
       if (sample.locked) {
-        setTrackingTrail((trail) => [...trail, { x: sample.x, y: sample.y }].slice(-40));
+        // Five samples per second, retained for a two-minute drift measurement.
+        setTrackingTrail((trail) => [...trail, { x: sample.x, y: sample.y }].slice(-600));
       }
     });
 
@@ -586,13 +608,13 @@ export default function App() {
               />
             ) : null}
 
-            {trailOnScreen.map((point, index) => (
+            {trailOnScreen.map(({ point, sourceIndex }, index) => (
               <View
-                key={index}
+                key={sourceIndex}
                 pointerEvents="none"
                 style={[
                   styles.trailPoint,
-                  robustDriftLine && !robustDriftLine.inliers[index]
+                  robustDriftLine && !robustDriftLine.inliers[sourceIndex]
                     ? styles.trailPointOutlier
                     : null,
                   {
