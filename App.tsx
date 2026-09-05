@@ -22,6 +22,12 @@ type DiagnosticRoute = {
 
 type Point = { x: number; y: number };
 type PreviewSize = { width: number; height: number };
+type RobustLineFit = {
+  start: Point;
+  end: Point;
+  inliers: boolean[];
+  inlierCount: number;
+};
 
 const MAX_PREVIEW_ZOOM = 10;
 
@@ -40,6 +46,124 @@ function boundedPan(point: Point, scale: number, size: PreviewSize): Point {
   return {
     x: clamp(point.x, -maximumX, maximumX),
     y: clamp(point.y, -maximumY, maximumY),
+  };
+}
+
+function median(values: number[]) {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0
+    ? (sorted[middle - 1] + sorted[middle]) / 2
+    : sorted[middle];
+}
+
+function totalLeastSquares(points: Point[]) {
+  if (points.length < 2) return null;
+  const center = points.reduce(
+    (sum, point) => ({ x: sum.x + point.x, y: sum.y + point.y }),
+    { x: 0, y: 0 }
+  );
+  center.x /= points.length;
+  center.y /= points.length;
+  let xx = 0;
+  let xy = 0;
+  let yy = 0;
+  for (const point of points) {
+    const dx = point.x - center.x;
+    const dy = point.y - center.y;
+    xx += dx * dx;
+    xy += dx * dy;
+    yy += dy * dy;
+  }
+  if (xx + yy < 1e-6) return null;
+  const angle = 0.5 * Math.atan2(2 * xy, xx - yy);
+  return {
+    center,
+    direction: { x: Math.cos(angle), y: Math.sin(angle) },
+  };
+}
+
+function pointLineDistance(point: Point, center: Point, direction: Point) {
+  return Math.abs(
+    (point.x - center.x) * -direction.y + (point.y - center.y) * direction.x
+  );
+}
+
+/** Robust orthogonal fit: pair consensus followed by iterative MAD rejection. */
+function fitRobustLine(points: Point[], size: PreviewSize): RobustLineFit | null {
+  if (points.length < 6 || size.width <= 0 || size.height <= 0) return null;
+  const pixels = points.map((point) => ({ x: point.x * size.width, y: point.y * size.height }));
+  const consensusThreshold = 3;
+  let bestInliers: boolean[] | null = null;
+  let bestCount = 0;
+  let bestResidual = Number.POSITIVE_INFINITY;
+
+  // With at most 40 samples, testing every pair is inexpensive and deterministic.
+  for (let first = 0; first < pixels.length - 1; first += 1) {
+    for (let second = first + 1; second < pixels.length; second += 1) {
+      const dx = pixels[second].x - pixels[first].x;
+      const dy = pixels[second].y - pixels[first].y;
+      const length = Math.hypot(dx, dy);
+      if (length < 2) continue;
+      const direction = { x: dx / length, y: dy / length };
+      const distances = pixels.map((point) =>
+        pointLineDistance(point, pixels[first], direction)
+      );
+      const inliers = distances.map((distance) => distance <= consensusThreshold);
+      const count = inliers.filter(Boolean).length;
+      const residual = distances.reduce(
+        (sum, distance, index) => sum + (inliers[index] ? distance : 0),
+        0
+      );
+      if (count > bestCount || (count === bestCount && residual < bestResidual)) {
+        bestInliers = inliers;
+        bestCount = count;
+        bestResidual = residual;
+      }
+    }
+  }
+  if (!bestInliers || bestCount < 4) return null;
+
+  let inliers = bestInliers;
+  let line = totalLeastSquares(pixels.filter((_, index) => inliers[index]));
+  if (!line) return null;
+  for (let iteration = 0; iteration < 3; iteration += 1) {
+    const distances = pixels.map((point) =>
+      pointLineDistance(point, line!.center, line!.direction)
+    );
+    const acceptedDistances = distances.filter((_, index) => inliers[index]);
+    const distanceMedian = median(acceptedDistances);
+    const mad = median(acceptedDistances.map((distance) => Math.abs(distance - distanceMedian)));
+    const rejectionThreshold = clamp(distanceMedian + 3 * 1.4826 * mad, 2, 8);
+    const nextInliers = distances.map((distance) => distance <= rejectionThreshold);
+    if (nextInliers.filter(Boolean).length < 4) break;
+    inliers = nextInliers;
+    line = totalLeastSquares(pixels.filter((_, index) => inliers[index]));
+    if (!line) return null;
+  }
+
+  const accepted = pixels.filter((_, index) => inliers[index]);
+  const projections = accepted.map(
+    (point) =>
+      (point.x - line!.center.x) * line!.direction.x +
+      (point.y - line!.center.y) * line!.direction.y
+  );
+  let minimum = Math.min(...projections);
+  let maximum = Math.max(...projections);
+  if (maximum - minimum < 4) return null;
+  const extension = Math.min(12, Math.max(4, (maximum - minimum) * 0.08));
+  minimum -= extension;
+  maximum += extension;
+  const endpoint = (projection: number) => ({
+    x: (line!.center.x + projection * line!.direction.x) / size.width,
+    y: (line!.center.y + projection * line!.direction.y) / size.height,
+  });
+  return {
+    start: endpoint(minimum),
+    end: endpoint(maximum),
+    inliers,
+    inlierCount: inliers.filter(Boolean).length,
   };
 }
 
@@ -270,6 +394,24 @@ export default function App() {
     [previewPan, previewSize, previewZoom, trackingTrail]
   );
 
+  const robustDriftLine = useMemo(
+    () => fitRobustLine(trackingTrail, previewSize),
+    [previewSize, trackingTrail]
+  );
+
+  const driftLineOnScreen = useMemo(() => {
+    if (!robustDriftLine) return null;
+    const start = pointToScreen(robustDriftLine.start);
+    const end = pointToScreen(robustDriftLine.end);
+    const length = Math.hypot(end.x - start.x, end.y - start.y);
+    return {
+      left: (start.x + end.x) / 2 - length / 2,
+      top: (start.y + end.y) / 2 - 1,
+      width: length,
+      angle: Math.atan2(end.y - start.y, end.x - start.x),
+    };
+  }, [previewPan, previewSize, previewZoom, robustDriftLine]);
+
   const statusColor = useMemo(() => {
     if (stateName === 'streaming') return '#54e397';
     if (stateName === 'ready') return '#65b8ff';
@@ -429,12 +571,30 @@ export default function App() {
               </View>
             ) : null}
 
+            {driftLineOnScreen ? (
+              <View
+                pointerEvents="none"
+                style={[
+                  styles.driftLine,
+                  {
+                    left: driftLineOnScreen.left,
+                    top: driftLineOnScreen.top,
+                    width: driftLineOnScreen.width,
+                    transform: [{ rotate: `${driftLineOnScreen.angle}rad` }],
+                  },
+                ]}
+              />
+            ) : null}
+
             {trailOnScreen.map((point, index) => (
               <View
                 key={index}
                 pointerEvents="none"
                 style={[
                   styles.trailPoint,
+                  robustDriftLine && !robustDriftLine.inliers[index]
+                    ? styles.trailPointOutlier
+                    : null,
                   {
                     left: point.x - 2,
                     top: point.y - 2,
@@ -545,6 +705,11 @@ export default function App() {
                 </Text>
               ) : selectedStar ? (
                 <Text style={styles.trackingStatus}>Recherche de l’étoile…</Text>
+              ) : null}
+              {robustDriftLine ? (
+                <Text style={styles.lineFitStatus}>
+                  Droite robuste · {robustDriftLine.inlierCount}/{trackingTrail.length} points retenus
+                </Text>
               ) : null}
               <ActionButton
                 title="Réinitialiser zoom et sélection"
@@ -799,6 +964,19 @@ const styles = StyleSheet.create({
     borderRadius: 2,
     backgroundColor: '#65b8ff',
   },
+  trailPointOutlier: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#ff8a65',
+  },
+  driftLine: {
+    position: 'absolute',
+    height: 2,
+    borderRadius: 1,
+    backgroundColor: '#5ee7ff',
+    opacity: 0.9,
+  },
   controlColumn: {
     flex: 1,
     maxWidth: 560,
@@ -881,6 +1059,11 @@ const styles = StyleSheet.create({
   },
   trackingStatusLost: {
     color: '#ff8a8a',
+  },
+  lineFitStatus: {
+    color: '#5ee7ff',
+    fontFamily: 'monospace',
+    fontSize: 10,
   },
   error: {
     padding: 10,
