@@ -10,10 +10,11 @@
     "build:apk": "npx eas-cli build --platform android --profile preview"
   },
   "dependencies": {
-    "expo": "~57.0.7",
+    "expo": "~57.0.20",
     "expo-sony-camera": "0.2.1",
+    "expo-updates": "~57.0.21",
     "react": "19.2.3",
-    "react-native": "0.86.0"
+    "react-native": "0.86.3"
   },
   "devDependencies": {
     "@types/react": "~19.2.2",
