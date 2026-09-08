@@ -723,7 +723,11 @@ export default function App() {
                   {trackingSample.locked ? 'ÉTOILE VERROUILLÉE' : 'ÉTOILE PERDUE'} · dx{' '}
                   {trackingSample.dxPixels.toFixed(2)} px · dy {trackingSample.dyPixels.toFixed(2)} px
                   {'\n'}Image {trackingSample.frameWidth}×{trackingSample.frameHeight} · contraste{' '}
-                  {trackingSample.contrast.toFixed(1)} · bruit {trackingSample.noise.toFixed(1)}
+                  {trackingSample.contrast.toFixed(1)} · bruit {trackingSample.noise.toFixed(1)} · fond{' '}
+                  {trackingSample.background.toFixed(1)}
+                  {'\n'}SNR relatif {trackingSample.snr.toFixed(1)} · HFD{' '}
+                  {trackingSample.hfd.toFixed(2)} px · masse {trackingSample.mass.toFixed(0)}
+                  {trackingSample.saturated ? '\nÉTOILE SATURÉE — choisir une étoile moins brillante' : ''}
                 </Text>
               ) : selectedStar ? (
                 <Text style={styles.trackingStatus}>Recherche de l’étoile…</Text>
