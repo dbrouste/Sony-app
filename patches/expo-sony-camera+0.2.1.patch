@@ -12,13 +12,14 @@ index 18b5959..2680983 100644
              }
              lastFrameJpeg = jpeg
 diff --git a/node_modules/expo-sony-camera/android/src/main/java/expo/modules/sonycamera/SonyCameraModule.kt b/node_modules/expo-sony-camera/android/src/main/java/expo/modules/sonycamera/SonyCameraModule.kt
-index 015b9a8..f0cae00 100644
+index 015b9a8..59e1641 100644
 --- a/node_modules/expo-sony-camera/android/src/main/java/expo/modules/sonycamera/SonyCameraModule.kt
 +++ b/node_modules/expo-sony-camera/android/src/main/java/expo/modules/sonycamera/SonyCameraModule.kt
-@@ -1,16 +1,38 @@
+@@ -1,16 +1,51 @@
  package expo.modules.sonycamera
  
  import android.content.Intent
++import android.graphics.Bitmap
 +import android.graphics.BitmapFactory
 +import android.os.SystemClock
  import expo.modules.kotlin.modules.Module
@@ -46,6 +47,18 @@ index 015b9a8..f0cae00 100644
 +    val viewWidth: Double,
 +    val viewHeight: Double,
 +  )
++
++  private data class BackgroundStats(
++    val mean: Double,
++    val sigma: Double,
++    val count: Int,
++  )
++
++  private data class FluxSample(
++    val x: Int,
++    val y: Int,
++    val flux: Double,
++  )
  
    override fun definition() = ModuleDefinition {
      Name("SonyCamera")
@@ -55,7 +68,7 @@ index 015b9a8..f0cae00 100644
  
      OnCreate {
        val context = requireNotNull(appContext.reactContext)
-@@ -27,6 +49,7 @@ class SonyCameraModule : Module(), SonyCameraController.Listener {
+@@ -27,6 +62,7 @@ class SonyCameraModule : Module(), SonyCameraController.Listener {
      OnDestroy {
        controller.removeListener(this@SonyCameraModule)
        controller.close()
@@ -63,7 +76,7 @@ index 015b9a8..f0cae00 100644
        if (SonyCameraRegistry.controller === controller) SonyCameraRegistry.controller = null
      }
  
-@@ -48,6 +71,28 @@ class SonyCameraModule : Module(), SonyCameraController.Listener {
+@@ -48,6 +84,28 @@ class SonyCameraModule : Module(), SonyCameraController.Listener {
      AsyncFunction("focusAt") { x: Double, y: Double, viewWidth: Double, viewHeight: Double ->
        controller.focusAtBlocking(x, y, viewWidth, viewHeight)
      }
@@ -92,7 +105,7 @@ index 015b9a8..f0cae00 100644
  
      View(SonyCameraView::class) {
        Prop("active") { view: SonyCameraView, active: Boolean -> view.setActive(active) }
-@@ -67,7 +112,159 @@ class SonyCameraModule : Module(), SonyCameraController.Listener {
+@@ -67,7 +125,281 @@ class SonyCameraModule : Module(), SonyCameraController.Listener {
      sendEvent("onPhotoCaptured", payload)
    }
  
@@ -110,6 +123,86 @@ index 015b9a8..f0cae00 100644
 +        trackingFramePending.set(false)
 +      }
 +    }
++  }
++
++  private fun luminance(pixel: Int): Double {
++    val red = (pixel shr 16) and 0xff
++    val green = (pixel shr 8) and 0xff
++    val blue = pixel and 0xff
++    return 0.2126 * red + 0.7152 * green + 0.0722 * blue
++  }
++
++  /** PHD2-style weighted 3x3 smoothing, normalized to the source luminance range. */
++  private fun smoothedLuminance(bitmap: Bitmap, x: Int, y: Int): Double {
++    return (
++      4.0 * luminance(bitmap.getPixel(x, y)) +
++        2.0 * luminance(bitmap.getPixel(x - 1, y)) +
++        2.0 * luminance(bitmap.getPixel(x + 1, y)) +
++        2.0 * luminance(bitmap.getPixel(x, y - 1)) +
++        2.0 * luminance(bitmap.getPixel(x, y + 1)) +
++        luminance(bitmap.getPixel(x - 1, y - 1)) +
++        luminance(bitmap.getPixel(x + 1, y - 1)) +
++        luminance(bitmap.getPixel(x - 1, y + 1)) +
++        luminance(bitmap.getPixel(x + 1, y + 1))
++      ) / 16.0
++  }
++
++  /** Iterative sigma-clipped statistics for a background sample. */
++  private fun robustBackground(values: List<Double>): BackgroundStats? {
++    if (values.size < 10) return null
++    var accepted = values
++    repeat(8) {
++      val mean = accepted.average()
++      val variance = if (accepted.size > 1) {
++        accepted.sumOf { value ->
++          val delta = value - mean
++          delta * delta
++        } / (accepted.size - 1)
++      } else {
++        0.0
++      }
++      val sigma = kotlin.math.sqrt(maxOf(0.0, variance))
++      if (sigma < 0.25) {
++        return BackgroundStats(mean, sigma, accepted.size)
++      }
++      val next = values.filter { value -> kotlin.math.abs(value - mean) <= 2.0 * sigma }
++      if (next.size < 10 || next.size == accepted.size) {
++        return BackgroundStats(mean, sigma, accepted.size)
++      }
++      accepted = next
++    }
++    val mean = accepted.average()
++    val variance = if (accepted.size > 1) {
++      accepted.sumOf { value ->
++        val delta = value - mean
++        delta * delta
++      } / (accepted.size - 1)
++    } else {
++      0.0
++    }
++    return BackgroundStats(mean, kotlin.math.sqrt(maxOf(0.0, variance)), accepted.size)
++  }
++
++  private fun halfFluxDiameter(samples: List<FluxSample>, centerX: Double, centerY: Double, mass: Double): Double {
++    if (samples.isEmpty() || mass <= 0.0) return 0.0
++    if (samples.size == 1) return 0.5
++    val radialFlux = samples.map { sample ->
++      val radius = kotlin.math.hypot(sample.x - centerX, sample.y - centerY)
++      radius to sample.flux
++    }.sortedBy { it.first }
++    val halfMass = mass / 2.0
++    var accumulated = 0.0
++    var previousRadius = 0.0
++    for ((radius, flux) in radialFlux) {
++      val next = accumulated + flux
++      if (next >= halfMass) {
++        val fraction = if (flux > 0.0) ((halfMass - accumulated) / flux).coerceIn(0.0, 1.0) else 0.0
++        return 2.0 * (previousRadius + (radius - previousRadius) * fraction)
++      }
++      accumulated = next
++      previousRadius = radius
++    }
++    return 2.0 * radialFlux.last().first
 +  }
 +
 +  private fun analyseTrackingFrame(jpeg: ByteArray) {
@@ -136,81 +229,117 @@ index 015b9a8..f0cae00 100644
 +      val top = maxOf(0, centerY.toInt() - radius)
 +      val bottom = minOf(height - 1, centerY.toInt() + radius)
 +
-+      var luminanceSum = 0.0
-+      var luminanceSquaredSum = 0.0
-+      var sampleCount = 0
++      val coarseBackgroundSamples = mutableListOf<Double>()
 +      for (py in top..bottom step 2) {
 +        for (px in left..right step 2) {
-+          val pixel = bitmap.getPixel(px, py)
-+          val red = (pixel shr 16) and 0xff
-+          val green = (pixel shr 8) and 0xff
-+          val blue = pixel and 0xff
-+          val luminance = 0.2126 * red + 0.7152 * green + 0.0722 * blue
-+          luminanceSum += luminance
-+          luminanceSquaredSum += luminance * luminance
-+          sampleCount += 1
++          coarseBackgroundSamples.add(luminance(bitmap.getPixel(px, py)))
 +        }
 +      }
-+      if (sampleCount == 0) return
-+      val background = luminanceSum / sampleCount
-+      val variance = maxOf(0.0, luminanceSquaredSum / sampleCount - background * background)
-+      val noise = kotlin.math.sqrt(variance)
++      val coarseBackground = robustBackground(coarseBackgroundSamples) ?: return
++
 +      // Prefer the bright source closest to the user's tap/current centroid. This avoids
-+      // jumping to another, brighter star elsewhere in the search window.
++      // jumping to another, brighter star elsewhere in the search window. Peak detection
++      // uses PHD2's weighted 3x3 smoothing so isolated JPEG noise is less attractive.
 +      val attractionSigma = maxOf(8.0, radius / 3.0)
 +      var peakX = centerX.toInt()
 +      var peakY = centerY.toInt()
-+      var peakLuminance = background
++      var smoothedPeak = coarseBackground.mean
 +      var peakScore = Double.NEGATIVE_INFINITY
-+      for (py in top..bottom) {
-+        for (px in left..right) {
-+          val pixel = bitmap.getPixel(px, py)
-+          val red = (pixel shr 16) and 0xff
-+          val green = (pixel shr 8) and 0xff
-+          val blue = pixel and 0xff
-+          val luminance = 0.2126 * red + 0.7152 * green + 0.0722 * blue
++      for (py in maxOf(1, top)..minOf(height - 2, bottom)) {
++        for (px in maxOf(1, left)..minOf(width - 2, right)) {
++          val candidate = smoothedLuminance(bitmap, px, py)
 +          val dx = px - centerX
 +          val dy = py - centerY
 +          val proximity = kotlin.math.exp(-(dx * dx + dy * dy) / (2.0 * attractionSigma * attractionSigma))
-+          val score = (luminance - background) * proximity
++          val score = (candidate - coarseBackground.mean) * proximity
 +          if (score > peakScore) {
 +            peakScore = score
-+            peakLuminance = luminance
++            smoothedPeak = candidate
 +            peakX = px
 +            peakY = py
 +          }
 +        }
 +      }
-+      val contrast = peakLuminance - background
-+      val threshold = background + maxOf(8.0, contrast * 0.35)
-+      val locked = contrast >= maxOf(12.0, noise * 2.0)
 +
-+      var weightSum = 0.0
++      // The A7R II provides an 8-bit gamma-encoded JPEG rather than PHD2's linear guide
++      // frame, so aperture radii scale gently with resolution instead of using fixed pixels.
++      val apertureRadius = maxOf(7, minOf(width, height) / 80).coerceAtMost(12)
++      val backgroundInnerRadius = apertureRadius + 2
++      val backgroundOuterRadius = backgroundInnerRadius + maxOf(5, apertureRadius / 2)
++      val innerSquared = backgroundInnerRadius * backgroundInnerRadius
++      val outerSquared = backgroundOuterRadius * backgroundOuterRadius
++      val annulusSamples = mutableListOf<Double>()
++      for (py in maxOf(0, peakY - backgroundOuterRadius)..minOf(height - 1, peakY + backgroundOuterRadius)) {
++        val dy = py - peakY
++        for (px in maxOf(0, peakX - backgroundOuterRadius)..minOf(width - 1, peakX + backgroundOuterRadius)) {
++          val dx = px - peakX
++          val distanceSquared = dx * dx + dy * dy
++          if (distanceSquared > innerSquared && distanceSquared <= outerSquared) {
++            annulusSamples.add(luminance(bitmap.getPixel(px, py)))
++          }
++        }
++      }
++      val backgroundStats = robustBackground(annulusSamples) ?: coarseBackground
++      val background = backgroundStats.mean
++      val noise = backgroundStats.sigma
++      val threshold = background + maxOf(2.0, 3.0 * noise)
++      val contrast = smoothedPeak - background
++
++      val apertureSquared = apertureRadius * apertureRadius
++      val fluxSamples = mutableListOf<FluxSample>()
++      val topValues = doubleArrayOf(0.0, 0.0, 0.0)
++      var mass = 0.0
 +      var weightedX = 0.0
 +      var weightedY = 0.0
-+      if (locked) {
-+        val centroidRadius = maxOf(5, minOf(width, height) / 60)
-+        val centroidLeft = maxOf(0, peakX - centroidRadius)
-+        val centroidRight = minOf(width - 1, peakX + centroidRadius)
-+        val centroidTop = maxOf(0, peakY - centroidRadius)
-+        val centroidBottom = minOf(height - 1, peakY + centroidRadius)
-+        for (py in centroidTop..centroidBottom) {
-+          for (px in centroidLeft..centroidRight) {
-+            val pixel = bitmap.getPixel(px, py)
-+            val red = (pixel shr 16) and 0xff
-+            val green = (pixel shr 8) and 0xff
-+            val blue = pixel and 0xff
-+            val luminance = 0.2126 * red + 0.7152 * green + 0.0722 * blue
-+            val weight = maxOf(0.0, luminance - threshold)
-+            weightSum += weight
-+            weightedX += px * weight
-+            weightedY += py * weight
++      for (py in maxOf(0, peakY - apertureRadius)..minOf(height - 1, peakY + apertureRadius)) {
++        val dy = py - peakY
++        for (px in maxOf(0, peakX - apertureRadius)..minOf(width - 1, peakX + apertureRadius)) {
++          val dx = px - peakX
++          if (dx * dx + dy * dy > apertureSquared) continue
++          val value = luminance(bitmap.getPixel(px, py))
++          if (value > topValues[0]) {
++            topValues[2] = topValues[1]
++            topValues[1] = topValues[0]
++            topValues[0] = value
++          } else if (value > topValues[1]) {
++            topValues[2] = topValues[1]
++            topValues[1] = value
++          } else if (value > topValues[2]) {
++            topValues[2] = value
++          }
++          if (value >= threshold) {
++            val flux = value - background
++            mass += flux
++            weightedX += px * flux
++            weightedY += py * flux
++            fluxSamples.add(FluxSample(px, py, flux))
 +          }
 +        }
 +      }
 +
-+      val foundX = if (weightSum > 0.0) weightedX / weightSum else centerX
-+      val foundY = if (weightSum > 0.0) weightedY / weightSum else centerY
++      val candidateX = if (mass > 0.0) weightedX / mass else centerX
++      val candidateY = if (mass > 0.0) weightedY / mass else centerY
++      val hfd = halfFluxDiameter(fluxSamples, candidateX, candidateY, mass)
++      // This is a relative SNR for gamma-encoded JPEG data, not a photometric SNR.
++      val snr = if (mass > 0.0 && fluxSamples.isNotEmpty()) {
++        mass / kotlin.math.sqrt(
++          mass + noise * noise * fluxSamples.size * (1.0 + 1.0 / backgroundStats.count)
++        )
++      } else {
++        0.0
++      }
++      val flatTop = topValues[0] - topValues[2] <= maxOf(1.0, topValues[0] / 191.0)
++      val saturated = topValues[0] >= 250.0 && flatTop
++      val locked =
++        smoothedPeak > threshold &&
++          contrast >= maxOf(4.0, 2.0 * noise) &&
++          mass >= 10.0 &&
++          snr >= 3.0 &&
++          hfd >= 1.0 &&
++          hfd <= 2.0 * apertureRadius &&
++          !saturated
++      val foundX = if (locked) candidateX else centerX
++      val foundY = if (locked) candidateY else centerY
 +      val imageReferenceX = viewToImageX(target.referenceX)
 +      val imageReferenceY = viewToImageY(target.referenceY)
 +      val viewX = ((foundX * scale - cropX) / target.viewWidth).coerceIn(0.0, 1.0)
@@ -219,7 +348,7 @@ index 015b9a8..f0cae00 100644
 +        trackingTarget?.generation == target.generation
 +      }
 +      if (!stillCurrent) return
-+      if (locked && weightSum > 0.0) {
++      if (locked) {
 +        synchronized(trackingLock) {
 +          trackingTarget?.takeIf { it.generation == target.generation }?.let {
 +            it.currentX = viewX
@@ -230,13 +359,19 @@ index 015b9a8..f0cae00 100644
 +      sendEvent(
 +        "onStarTracked",
 +        mapOf(
-+          "locked" to (locked && weightSum > 0.0),
++          "locked" to locked,
 +          "x" to viewX,
 +          "y" to viewY,
 +          "dxPixels" to (foundX - imageReferenceX),
 +          "dyPixels" to (foundY - imageReferenceY),
 +          "contrast" to contrast,
 +          "noise" to noise,
++          "background" to background,
++          "mass" to mass,
++          "snr" to snr,
++          "hfd" to hfd,
++          "saturated" to saturated,
++          "apertureRadius" to apertureRadius,
 +          "frameWidth" to width,
 +          "frameHeight" to height,
 +          "timestamp" to System.currentTimeMillis().toDouble(),
@@ -253,6 +388,90 @@ index 015b9a8..f0cae00 100644
  }
  
  internal object SonyCameraRegistry {
+diff --git a/node_modules/expo-sony-camera/android/src/main/java/expo/modules/sonycamera/SonyCameraView.kt b/node_modules/expo-sony-camera/android/src/main/java/expo/modules/sonycamera/SonyCameraView.kt
+index 80dc3a8..facb6c3 100644
+--- a/node_modules/expo-sony-camera/android/src/main/java/expo/modules/sonycamera/SonyCameraView.kt
++++ b/node_modules/expo-sony-camera/android/src/main/java/expo/modules/sonycamera/SonyCameraView.kt
+@@ -12,9 +12,15 @@ import android.widget.ImageView
+ import android.widget.TextView
+ import expo.modules.kotlin.AppContext
+ import expo.modules.kotlin.views.ExpoView
++import java.util.concurrent.atomic.AtomicBoolean
++import java.util.concurrent.atomic.AtomicInteger
+ 
+ class SonyCameraView(context: Context, appContext: AppContext) : ExpoView(context, appContext), SonyCameraController.Listener {
+   private val mainHandler = Handler(Looper.getMainLooper())
++  // Keep at most one decoded frame waiting for the UI thread. Queuing every JPEG makes
++  // latency grow without bound whenever rendering is momentarily slower than reception.
++  private val frameInFlight = AtomicBoolean(false)
++  private val displayGeneration = AtomicInteger(0)
+   private val imageView = ImageView(context).apply {
+     layoutParams = FrameLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT)
+     scaleType = ImageView.ScaleType.CENTER_CROP
+@@ -27,7 +33,7 @@ class SonyCameraView(context: Context, appContext: AppContext) : ExpoView(contex
+     setBackgroundColor(Color.argb(165, 5, 10, 14))
+     text = "Connect Sony camera"
+   }
+-  private var active = false
++  @Volatile private var active = false
+   private var bitmap: Bitmap? = null
+   private var controller: SonyCameraController? = null
+ 
+@@ -49,6 +55,7 @@ class SonyCameraView(context: Context, appContext: AppContext) : ExpoView(contex
+   fun setActive(next: Boolean) {
+     if (active == next) return
+     active = next
++    displayGeneration.incrementAndGet()
+     if (next) {
+       attachController()
+       controller?.startLiveView()
+@@ -59,6 +66,7 @@ class SonyCameraView(context: Context, appContext: AppContext) : ExpoView(contex
+ 
+   fun cleanup() {
+     active = false
++    displayGeneration.incrementAndGet()
+     detachController()
+     imageView.setImageDrawable(null)
+     bitmap?.recycle()
+@@ -82,13 +90,31 @@ class SonyCameraView(context: Context, appContext: AppContext) : ExpoView(contex
+   }
+ 
+   override fun onFrame(jpeg: ByteArray) {
+-    val decoded = BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size) ?: return
+-    mainHandler.post {
+-      val previous = bitmap
+-      bitmap = decoded
+-      imageView.setImageBitmap(decoded)
+-      statusView.visibility = GONE
+-      if (previous != null && previous !== decoded && !previous.isRecycled) previous.recycle()
++    if (!active || !frameInFlight.compareAndSet(false, true)) return
++    val generation = displayGeneration.get()
++    val decoded = BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size)
++    if (decoded == null) {
++      frameInFlight.set(false)
++      return
++    }
++    val posted = mainHandler.post {
++      try {
++        if (!active || generation != displayGeneration.get()) {
++          decoded.recycle()
++          return@post
++        }
++        val previous = bitmap
++        bitmap = decoded
++        imageView.setImageBitmap(decoded)
++        statusView.visibility = GONE
++        if (previous != null && previous !== decoded && !previous.isRecycled) previous.recycle()
++      } finally {
++        frameInFlight.set(false)
++      }
++    }
++    if (!posted) {
++      decoded.recycle()
++      frameInFlight.set(false)
+     }
+   }
+ 
 diff --git a/node_modules/expo-sony-camera/android/src/main/java/expo/modules/sonycamera/SonyScalarWebApiTransport.kt b/node_modules/expo-sony-camera/android/src/main/java/expo/modules/sonycamera/SonyScalarWebApiTransport.kt
 index e97326d..81a7d82 100644
 --- a/node_modules/expo-sony-camera/android/src/main/java/expo/modules/sonycamera/SonyScalarWebApiTransport.kt
@@ -387,10 +606,10 @@ index e97326d..81a7d82 100644
        requestMethod = "GET"
        connectTimeout = 3_000
 diff --git a/node_modules/expo-sony-camera/build/SonyCamera.types.d.ts b/node_modules/expo-sony-camera/build/SonyCamera.types.d.ts
-index ad7d34a..6b022f1 100644
+index 1858ee5..bd08a29 100644
 --- a/node_modules/expo-sony-camera/build/SonyCamera.types.d.ts
 +++ b/node_modules/expo-sony-camera/build/SonyCamera.types.d.ts
-@@ -113,10 +113,23 @@ export type SonyFocusResult = {
+@@ -113,10 +113,33 @@ export type SonyFocusResult = {
      status: 'focused' | 'started' | 'failed' | 'unsupported';
      reason?: string;
  };
@@ -402,6 +621,16 @@ index ad7d34a..6b022f1 100644
 +    dyPixels: number;
 +    contrast: number;
 +    noise: number;
++    /** Sigma-clipped local sky/background luminance in the 8-bit Sony JPEG. */
++    background: number;
++    /** Background-subtracted flux inside the centroid aperture. */
++    mass: number;
++    /** Relative signal-to-noise estimate for the gamma-encoded JPEG. */
++    snr: number;
++    /** Half-flux diameter in source JPEG pixels. */
++    hfd: number;
++    saturated: boolean;
++    apertureRadius: number;
 +    frameWidth: number;
 +    frameHeight: number;
 +    timestamp: number;
@@ -415,7 +644,7 @@ index ad7d34a..6b022f1 100644
  export type SonyCameraViewProps = {
      active?: boolean;
 diff --git a/node_modules/expo-sony-camera/build/SonyCameraModule.d.ts b/node_modules/expo-sony-camera/build/SonyCameraModule.d.ts
-index 59bc38f..c73ccb5 100644
+index 6e395a0..c73ccb5 100644
 --- a/node_modules/expo-sony-camera/build/SonyCameraModule.d.ts
 +++ b/node_modules/expo-sony-camera/build/SonyCameraModule.d.ts
 @@ -16,6 +16,9 @@ declare class SonyCameraNativeModule extends NativeModule<SonyCameraModuleEvents
@@ -429,10 +658,10 @@ index 59bc38f..c73ccb5 100644
      clearDiagnostics(): void;
  }
 diff --git a/node_modules/expo-sony-camera/src/SonyCamera.types.ts b/node_modules/expo-sony-camera/src/SonyCamera.types.ts
-index b125ec2..b000410 100644
+index b125ec2..49171d8 100644
 --- a/node_modules/expo-sony-camera/src/SonyCamera.types.ts
 +++ b/node_modules/expo-sony-camera/src/SonyCamera.types.ts
-@@ -152,11 +152,26 @@ export type SonyFocusResult = {
+@@ -152,11 +152,36 @@ export type SonyFocusResult = {
    status: 'focused' | 'started' | 'failed' | 'unsupported';
    reason?: string;
  };
@@ -446,6 +675,16 @@ index b125ec2..b000410 100644
 +  dyPixels: number;
 +  contrast: number;
 +  noise: number;
++  /** Sigma-clipped local sky/background luminance in the 8-bit Sony JPEG. */
++  background: number;
++  /** Background-subtracted flux inside the centroid aperture. */
++  mass: number;
++  /** Relative signal-to-noise estimate for the gamma-encoded JPEG. */
++  snr: number;
++  /** Half-flux diameter in source JPEG pixels. */
++  hfd: number;
++  saturated: boolean;
++  apertureRadius: number;
 +  frameWidth: number;
 +  frameHeight: number;
 +  timestamp: number;
@@ -473,87 +712,3 @@ index 48a3309..09adead 100644
    getDiagnostics(): SonyDiagnosticsSnapshot;
    clearDiagnostics(): void;
  }
-diff --git a/node_modules/expo-sony-camera/android/src/main/java/expo/modules/sonycamera/SonyCameraView.kt b/node_modules/expo-sony-camera/android/src/main/java/expo/modules/sonycamera/SonyCameraView.kt
-index 80dc3a8..facb6c3 100644
---- a/node_modules/expo-sony-camera/android/src/main/java/expo/modules/sonycamera/SonyCameraView.kt
-+++ b/node_modules/expo-sony-camera/android/src/main/java/expo/modules/sonycamera/SonyCameraView.kt
-@@ -12,9 +12,15 @@ import android.widget.ImageView
- import android.widget.TextView
- import expo.modules.kotlin.AppContext
- import expo.modules.kotlin.views.ExpoView
-+import java.util.concurrent.atomic.AtomicBoolean
-+import java.util.concurrent.atomic.AtomicInteger
- 
- class SonyCameraView(context: Context, appContext: AppContext) : ExpoView(context, appContext), SonyCameraController.Listener {
-   private val mainHandler = Handler(Looper.getMainLooper())
-+  // Keep at most one decoded frame waiting for the UI thread. Queuing every JPEG makes
-+  // latency grow without bound whenever rendering is momentarily slower than reception.
-+  private val frameInFlight = AtomicBoolean(false)
-+  private val displayGeneration = AtomicInteger(0)
-   private val imageView = ImageView(context).apply {
-     layoutParams = FrameLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT)
-     scaleType = ImageView.ScaleType.CENTER_CROP
-@@ -27,7 +33,7 @@ class SonyCameraView(context: Context, appContext: AppContext) : ExpoView(contex
-     setBackgroundColor(Color.argb(165, 5, 10, 14))
-     text = "Connect Sony camera"
-   }
--  private var active = false
-+  @Volatile private var active = false
-   private var bitmap: Bitmap? = null
-   private var controller: SonyCameraController? = null
- 
-@@ -49,6 +55,7 @@ class SonyCameraView(context: Context, appContext: AppContext) : ExpoView(contex
-   fun setActive(next: Boolean) {
-     if (active == next) return
-     active = next
-+    displayGeneration.incrementAndGet()
-     if (next) {
-       attachController()
-       controller?.startLiveView()
-@@ -59,6 +66,7 @@ class SonyCameraView(context: Context, appContext: AppContext) : ExpoView(contex
- 
-   fun cleanup() {
-     active = false
-+    displayGeneration.incrementAndGet()
-     detachController()
-     imageView.setImageDrawable(null)
-     bitmap?.recycle()
-@@ -82,13 +90,31 @@ class SonyCameraView(context: Context, appContext: AppContext) : ExpoView(contex
-   }
- 
-   override fun onFrame(jpeg: ByteArray) {
--    val decoded = BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size) ?: return
--    mainHandler.post {
--      val previous = bitmap
--      bitmap = decoded
--      imageView.setImageBitmap(decoded)
--      statusView.visibility = GONE
--      if (previous != null && previous !== decoded && !previous.isRecycled) previous.recycle()
-+    if (!active || !frameInFlight.compareAndSet(false, true)) return
-+    val generation = displayGeneration.get()
-+    val decoded = BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size)
-+    if (decoded == null) {
-+      frameInFlight.set(false)
-+      return
-+    }
-+    val posted = mainHandler.post {
-+      try {
-+        if (!active || generation != displayGeneration.get()) {
-+          decoded.recycle()
-+          return@post
-+        }
-+        val previous = bitmap
-+        bitmap = decoded
-+        imageView.setImageBitmap(decoded)
-+        statusView.visibility = GONE
-+        if (previous != null && previous !== decoded && !previous.isRecycled) previous.recycle()
-+      } finally {
-+        frameInFlight.set(false)
-+      }
-+    }
-+    if (!posted) {
-+      decoded.recycle()
-+      frameInFlight.set(false)
-     }
-   }
- 
