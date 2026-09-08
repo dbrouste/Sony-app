@@ -22,7 +22,7 @@ sélectionner une étoile et suit sa position afin de mesurer sa dérive.
 | Zoom tactile et boutons +/− | Validé | Zoom d’affichage de ×1 à ×10 |
 | Déplacement dans l’image zoomée | Validé | Glissement à un doigt |
 | Sélection d’une étoile par toucher | Validée | Les coordonnées tiennent compte du zoom et du déplacement |
-| Suivi du centroïde de l’étoile | Validé initialement | Calcul natif Android à 5 mesures/s |
+| Suivi du centroïde de l’étoile | Nouvel estimateur implémenté, à tester | Calcul natif Android à 5 mesures/s, inspiré de PHD2 |
 | Qualité Live View maximale | Implémentée, à confirmer | Demande de taille Sony `M` si disponible, sinon repli automatique |
 | Réduction de la latence d’affichage | Implémentée, à tester | Les anciennes images sont abandonnées au lieu d’être mises en file |
 | Trace de déplacement de l’étoile | Implémentée, à tester sur le ciel | Jusqu’à 600 points, soit environ 2 minutes |
@@ -87,10 +87,18 @@ Le suivi est exécuté dans le module Android natif afin d’éviter de transfé
 chaque JPEG vers JavaScript. Toutes les 200 ms, il :
 
 - recherche une source lumineuse près de la dernière position connue ;
-- estime le fond et le bruit local ;
-- calcule le centroïde des pixels significativement plus lumineux ;
-- publie la position, le déplacement `dx/dy`, le contraste et l’état
-  verrouillé/perdu.
+- lisse la zone avec un noyau pondéré 3×3 pour limiter les faux pics JPEG ;
+- estime le fond dans une couronne autour de l’étoile avec rejet sigma itératif ;
+- calcule un centroïde pondéré dans une ouverture circulaire adaptative ;
+- calcule la masse, un SNR relatif, le HFD et un indicateur de saturation ;
+- publie la position, le déplacement `dx/dy` et l’état verrouillé/perdu.
+
+Cette chaîne reprend les principes du calcul de centroïde de
+[PHD2](https://github.com/OpenPHDGuiding/phd2/blob/master/src/star.cpp), mais
+elle est adaptée au Live View couleur, compressé, gamma-corrigé et limité à
+8 bits du Sony. La préférence pour la source proche de la position précédente
+est conservée afin d’éviter un saut vers une autre étoile. Une mesure saturée,
+de SNR insuffisant ou de diamètre incohérent n’est pas ajoutée à la trace.
 
 L’interface conserve jusqu’à 600 positions verrouillées. Les points acceptés par
 l’ajustement sont affichés en bleu et les points aberrants en orange.
@@ -217,7 +225,7 @@ Un nouveau build Android reste obligatoire après une modification de :
 
 - Expo SDK 57 / React Native ;
 - `expo-sony-camera` 0.2.1 avec correctifs conservés par `patch-package` ;
-- traitement du Live View et suivi du centroïde en Kotlin ;
+- traitement du Live View et suivi robuste du centroïde inspiré de PHD2 en Kotlin ;
 - interface, trace et ajustement robuste en TypeScript/React Native ;
 - builds APK avec EAS Build ;
 - mises à jour non natives avec EAS Update.
