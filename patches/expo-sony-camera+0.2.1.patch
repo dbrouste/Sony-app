@@ -12,7 +12,7 @@ index 18b5959..2680983 100644
              }
              lastFrameJpeg = jpeg
 diff --git a/node_modules/expo-sony-camera/android/src/main/java/expo/modules/sonycamera/SonyCameraModule.kt b/node_modules/expo-sony-camera/android/src/main/java/expo/modules/sonycamera/SonyCameraModule.kt
-index 015b9a8..c512204 100644
+index 015b9a8..c16ea7f 100644
 --- a/node_modules/expo-sony-camera/android/src/main/java/expo/modules/sonycamera/SonyCameraModule.kt
 +++ b/node_modules/expo-sony-camera/android/src/main/java/expo/modules/sonycamera/SonyCameraModule.kt
 @@ -1,16 +1,91 @@
@@ -161,7 +161,7 @@ index 015b9a8..c512204 100644
  
      View(SonyCameraView::class) {
        Prop("active") { view: SonyCameraView, active: Boolean -> view.setActive(active) }
-@@ -67,7 +181,552 @@ class SonyCameraModule : Module(), SonyCameraController.Listener {
+@@ -67,7 +181,554 @@ class SonyCameraModule : Module(), SonyCameraController.Listener {
      sendEvent("onPhotoCaptured", payload)
    }
  
@@ -594,6 +594,7 @@ index 015b9a8..c512204 100644
 +  }
 +
 +  private fun analyseTrackingFrame(jpeg: ByteArray) {
++    val analysisStartedAt = SystemClock.elapsedRealtime()
 +    val bitmap = BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size) ?: return
 +    try {
 +      val width = bitmap.width
@@ -695,6 +696,7 @@ index 015b9a8..c512204 100644
 +          "starCount" to tracked.size,
 +          "lockedStarCount" to lockedStars.size,
 +          "inlierStarCount" to usedStars.size,
++          "processingMs" to (SystemClock.elapsedRealtime() - analysisStartedAt).toDouble(),
 +          "stars" to starsPayload,
 +          "frameWidth" to width,
 +          "frameHeight" to height,
@@ -933,10 +935,10 @@ index e97326d..81a7d82 100644
        requestMethod = "GET"
        connectTimeout = 3_000
 diff --git a/node_modules/expo-sony-camera/build/SonyCamera.types.d.ts b/node_modules/expo-sony-camera/build/SonyCamera.types.d.ts
-index 1858ee5..3fddf49 100644
+index 1858ee5..04dd7ac 100644
 --- a/node_modules/expo-sony-camera/build/SonyCamera.types.d.ts
 +++ b/node_modules/expo-sony-camera/build/SonyCamera.types.d.ts
-@@ -113,10 +113,71 @@ export type SonyFocusResult = {
+@@ -113,10 +113,73 @@ export type SonyFocusResult = {
      status: 'focused' | 'started' | 'failed' | 'unsupported';
      reason?: string;
  };
@@ -965,6 +967,8 @@ index 1858ee5..3fddf49 100644
 +    starCount: number;
 +    lockedStarCount: number;
 +    inlierStarCount: number;
++    /** Native JPEG decode and multi-star analysis time for this sample. */
++    processingMs: number;
 +    stars: SonyTrackedStarSample[];
 +};
 +export type SonyTrackedStarSample = {
@@ -1025,10 +1029,10 @@ index 6e395a0..839982f 100644
      clearDiagnostics(): void;
  }
 diff --git a/node_modules/expo-sony-camera/src/SonyCamera.types.ts b/node_modules/expo-sony-camera/src/SonyCamera.types.ts
-index b125ec2..544f1e2 100644
+index b125ec2..ac4d351 100644
 --- a/node_modules/expo-sony-camera/src/SonyCamera.types.ts
 +++ b/node_modules/expo-sony-camera/src/SonyCamera.types.ts
-@@ -152,11 +152,77 @@ export type SonyFocusResult = {
+@@ -152,11 +152,79 @@ export type SonyFocusResult = {
    status: 'focused' | 'started' | 'failed' | 'unsupported';
    reason?: string;
  };
@@ -1059,6 +1063,8 @@ index b125ec2..544f1e2 100644
 +  starCount: number;
 +  lockedStarCount: number;
 +  inlierStarCount: number;
++  /** Native JPEG decode and multi-star analysis time for this sample. */
++  processingMs: number;
 +  stars: SonyTrackedStarSample[];
 +};
 +
