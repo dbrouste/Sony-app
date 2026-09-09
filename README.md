@@ -22,7 +22,9 @@ sélectionner une étoile et suit sa position afin de mesurer sa dérive.
 | Zoom tactile et boutons +/− | Validé | Zoom d’affichage de ×1 à ×10 |
 | Déplacement dans l’image zoomée | Validé | Glissement à un doigt |
 | Sélection d’une étoile par toucher | Validée | Les coordonnées tiennent compte du zoom et du déplacement |
+| Sélection automatique d’une étoile | Implémentée, à tester sur le ciel | Recherche native dans la zone visible, rejet du bord et des sources invalides |
 | Suivi du centroïde de l’étoile | Nouvel estimateur implémenté, à tester | Calcul natif Android à 5 mesures/s, inspiré de PHD2 |
+| Filtrage temporel sur 1 seconde | Implémenté, à tester sur le ciel | Régression pour l’affichage et médiane par seconde pour la trace |
 | Qualité Live View maximale | Implémentée, à confirmer | Demande de taille Sony `M` si disponible, sinon repli automatique |
 | Réduction de la latence d’affichage | Implémentée, à tester | Les anciennes images sont abandonnées au lieu d’être mises en file |
 | Trace de déplacement de l’étoile | Implémentée, à tester sur le ciel | Jusqu’à 600 points, soit environ 2 minutes |
@@ -76,6 +78,7 @@ Pendant le Live View :
 - utiliser les boutons **+** et **−** pour zoomer par pas ;
 - glisser à un doigt pour déplacer l’image lorsqu’elle est zoomée ;
 - toucher brièvement une étoile pour la sélectionner ;
+- utiliser **Sélection automatique** pour rechercher la meilleure étoile non saturée dans la zone visible ;
 - utiliser **Réinitialiser zoom et sélection** pour recommencer.
 
 Le zoom est uniquement un agrandissement de l’image reçue. Il ne modifie pas le
@@ -100,8 +103,13 @@ elle est adaptée au Live View couleur, compressé, gamma-corrigé et limité à
 est conservée afin d’éviter un saut vers une autre étoile. Une mesure saturée,
 de SNR insuffisant ou de diamètre incohérent n’est pas ajoutée à la trace.
 
-L’interface conserve jusqu’à 600 positions verrouillées. Les points acceptés par
-l’ajustement sont affichés en bleu et les points aberrants en orange.
+La position affichée est lissée par une régression linéaire sur la dernière
+seconde, ce qui réduit le bruit sans introduire le retard d’une moyenne mobile.
+Le verrouillage natif continue cependant d’utiliser les mesures brutes.
+
+La trace reçoit une position médiane par intervalle indépendant d’une seconde et
+conserve jusqu’à 120 positions, soit environ deux minutes. Les points acceptés
+par l’ajustement sont affichés en bleu et les points aberrants en orange.
 
 ### Droite robuste
 
@@ -195,6 +203,8 @@ Un nouveau build Android reste obligatoire après une modification de :
 - mesurer la latence réelle entre un mouvement devant le Sony et l’écran ;
 - confirmer la résolution Live View effectivement fournie par l’A7R II ;
 - tester la stabilité du verrouillage sur des étoiles de luminosités différentes ;
+- vérifier la sélection automatique, son temps de réponse et le candidat choisi ;
+- comparer le bruit des positions brutes et filtrées sur une minute ;
 - vérifier le rejet des faux points et la droite robuste sur une séquence réelle ;
 - valider le téléchargement et l’application d’une première mise à jour OTA.
 
