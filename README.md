@@ -192,6 +192,11 @@ Dans un Codespace :
 ```bash
 npm install
 npx expo-doctor
+npx eas-cli@latest env:set \
+  --environment preview \
+  --name EXPO_PUBLIC_GIT_COMMIT_SHA \
+  --value "$(git rev-parse --short HEAD)" \
+  --visibility plaintext
 npx eas-cli@latest build --platform android --profile preview
 ```
 
@@ -205,7 +210,11 @@ code JavaScript/TypeScript, aux styles ou aux ressources peut être publiée san
 recompiler l’APK :
 
 ```bash
-EXPO_PUBLIC_GIT_COMMIT_SHA="$(git rev-parse --short HEAD)" \
+npx eas-cli@latest env:set \
+  --environment preview \
+  --name EXPO_PUBLIC_GIT_COMMIT_SHA \
+  --value "$(git rev-parse --short HEAD)" \
+  --visibility plaintext
 npx eas-cli@latest update \
   --channel preview \
   --message "Description de la modification" \
