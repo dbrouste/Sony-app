@@ -31,7 +31,8 @@ sélectionner une étoile et suit sa position afin de mesurer sa dérive.
 | Droite robuste de la trace | Validée sur le ciel | Ajustement robuste et rejet des points aberrants |
 | Référence monture arrêtée | Implémentée, à tester | Acquisition guidée puis gel de la droite robuste |
 | Mesure de dérive signée | Implémentée, à tester | Écart perpendiculaire et pente robuste en pixels par minute |
-| EAS Update | Configuré, nouveau build requis | Le premier APK compatible OTA doit encore être construit et installé |
+| EAS Update | Configuré | Vérification et installation également disponibles depuis l’application |
+| Identification de la version | Implémentée | SHA Git publié et identifiant court de l’OTA exécutée |
 | Guidage azimut/altitude complet | À développer | Voir la feuille de route |
 
 ## Principe de la mesure
@@ -197,6 +198,7 @@ code JavaScript/TypeScript, aux styles ou aux ressources peut être publiée san
 recompiler l’APK :
 
 ```bash
+EXPO_PUBLIC_GIT_COMMIT_SHA="$(git rev-parse --short HEAD)" \
 npx eas-cli@latest update \
   --channel preview \
   --message "Description de la modification" \
@@ -205,6 +207,11 @@ npx eas-cli@latest update \
 
 Fermer puis rouvrir complètement l’application permet de télécharger la mise à
 jour. Un second redémarrage peut être nécessaire pour l’appliquer.
+
+L’écran affiche le SHA Git, l’identifiant court de l’OTA active et le canal EAS.
+Le bouton **Vérifier et installer la mise à jour** effectue immédiatement la
+vérification, le téléchargement et le redémarrage. Il faut l’utiliser sur un
+réseau fournissant Internet, avant de connecter Android au Wi-Fi du Sony.
 
 Un nouveau build Android reste obligatoire après une modification de :
 
