@@ -1,5 +1,6 @@
 import SonyCamera, { SonyCameraView } from 'expo-sony-camera';
 import type { SonyCameraState, SonyStarTrackingSample } from 'expo-sony-camera';
+import * as Updates from 'expo-updates';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -44,6 +45,7 @@ type DriftTrend = {
 
 const MAX_PREVIEW_ZOOM = 10;
 const MIN_REFERENCE_POINTS = 12;
+const APP_COMMIT = process.env.EXPO_PUBLIC_GIT_COMMIT_SHA ?? 'non renseigné';
 
 function clamp(value: number, minimum: number, maximum: number) {
   return Math.min(maximum, Math.max(minimum, value));
@@ -403,6 +405,8 @@ export default function App() {
   const [referenceLine, setReferenceLine] = useState<RobustLineFit | null>(null);
   const [driftMeasurements, setDriftMeasurements] = useState<DriftMeasurement[]>([]);
   const [autoSelecting, setAutoSelecting] = useState(false);
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const [updateMessage, setUpdateMessage] = useState<string | null>(null);
   const previewSizeRef = useRef(previewSize);
   const previewZoomRef = useRef(previewZoom);
   const previewPanRef = useRef(previewPan);
@@ -841,6 +845,32 @@ export default function App() {
     }
   }
 
+  async function checkForAppUpdate() {
+    if (!Updates.isEnabled) {
+      setUpdateMessage('EAS Update est désactivé dans cette installation.');
+      return;
+    }
+    setCheckingUpdate(true);
+    setUpdateMessage('Recherche d’une mise à jour…');
+    try {
+      const result = await Updates.checkForUpdateAsync();
+      if (!result.isAvailable) {
+        setUpdateMessage('Cette application utilise déjà la dernière mise à jour compatible.');
+        return;
+      }
+      setUpdateMessage('Téléchargement de la mise à jour…');
+      await Updates.fetchUpdateAsync();
+      setUpdateMessage('Mise à jour téléchargée · redémarrage…');
+      await Updates.reloadAsync();
+    } catch (error) {
+      setUpdateMessage(
+        `Échec de la mise à jour : ${errorMessage(error)}. Utilise un Wi-Fi avec Internet, pas celui du Sony.`
+      );
+    } finally {
+      setCheckingUpdate(false);
+    }
+  }
+
   function connect() {
     // The ESP32 implementation talks directly to the A7R II ScalarWebAPI service at
     // 192.168.122.1:8080. Force the same Wi-Fi protocol instead of allowing automatic
@@ -1047,6 +1077,19 @@ export default function App() {
           <Text style={styles.title}>Test A7R II</Text>
           <Text style={styles.subtitle}>ScalarWebAPI · Live View Wi-Fi</Text>
 
+          <View style={styles.versionPanel}>
+            <Text style={styles.versionText}>
+              Commit {APP_COMMIT} · OTA {Updates.updateId?.slice(0, 8) ?? 'intégrée'} · canal{' '}
+              {Updates.channel ?? 'inconnu'}
+            </Text>
+            <ActionButton
+              title={checkingUpdate ? 'Vérification…' : 'Vérifier et installer la mise à jour'}
+              onPress={() => void checkForAppUpdate()}
+              disabled={checkingUpdate}
+            />
+            {updateMessage ? <Text style={styles.updateMessage}>{updateMessage}</Text> : null}
+          </View>
+
           <View style={styles.steps}>
             <Text style={styles.step}>1. Sony : ouvrir Smart Remote Control.</Text>
             <Text style={styles.step}>2. Android : rejoindre le Wi-Fi affiché par le Sony.</Text>
@@ -1187,7 +1230,7 @@ export default function App() {
                     </Text>
                     {driftTrend ? (
                       <Text style={styles.driftResult}>
-                        Dérive {driftTrend.slopePixelsPerMinute >= 0 ? '+' : ''}
+                        Vitesse de dérive {driftTrend.slopePixelsPerMinute >= 0 ? '+' : ''}
                         {driftTrend.slopePixelsPerMinute.toFixed(2)} px/min
                         {'\n'}Écart signé {driftTrend.currentDistancePixels >= 0 ? '+' : ''}
                         {driftTrend.currentDistancePixels.toFixed(2)} px · RMS{' '}
@@ -1505,6 +1548,25 @@ const styles = StyleSheet.create({
     color: '#65b8ff',
     fontSize: 14,
     marginTop: -8,
+  },
+  versionPanel: {
+    gap: 8,
+    padding: 11,
+    borderRadius: 9,
+    borderWidth: 1,
+    borderColor: '#344258',
+    backgroundColor: '#111722',
+  },
+  versionText: {
+    color: '#9fb6d2',
+    fontFamily: 'monospace',
+    fontSize: 10,
+    lineHeight: 15,
+  },
+  updateMessage: {
+    color: '#f4c95d',
+    fontSize: 10,
+    lineHeight: 15,
   },
   steps: {
     gap: 5,
