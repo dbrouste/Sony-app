@@ -22,7 +22,8 @@ sélectionner une étoile et suit sa position afin de mesurer sa dérive.
 | Zoom tactile et boutons +/− | Validé | Zoom d’affichage de ×1 à ×10 |
 | Déplacement dans l’image zoomée | Validé | Glissement à un doigt |
 | Sélection d’une étoile par toucher | Validée | Les coordonnées tiennent compte du zoom et du déplacement |
-| Sélection automatique d’une étoile | Validée sur le ciel | Recherche native, rejet du bord, des sources saturées et des faux candidats |
+| Sélection automatique d’une étoile | Validée en mono-étoile | Le nouveau mode choisit de 1 à 12 étoiles avec une large marge au bord |
+| Suivi multi-étoiles | Implémenté, à tester | Consensus robuste des vecteurs puis moyenne pondérée par SNR et HFD |
 | Suivi du centroïde de l’étoile | Validé sur le ciel | Calcul natif Android à 5 mesures/s, inspiré de PHD2 |
 | Filtrage temporel sur 1 seconde | Validé sur le ciel | Régression pour l’affichage et médiane par seconde pour la trace |
 | Qualité Live View maximale | Implémentée, à confirmer | Demande de taille Sony `M` si disponible, sinon repli automatique |
@@ -80,13 +81,13 @@ Pendant le Live View :
 - utiliser les boutons **+** et **−** pour zoomer par pas ;
 - glisser à un doigt pour déplacer l’image lorsqu’elle est zoomée ;
 - toucher brièvement une étoile pour la sélectionner ;
-- utiliser **Sélection automatique** pour rechercher la meilleure étoile non saturée dans la zone visible ;
+- utiliser **Sélection automatique** pour rechercher de 1 à 12 étoiles non saturées, isolées et éloignées des bords ;
 - utiliser **Réinitialiser zoom et sélection** pour recommencer.
 
 Le zoom est uniquement un agrandissement de l’image reçue. Il ne modifie pas le
 zoom optique ou numérique du Sony.
 
-### Suivi de l’étoile
+### Suivi mono-étoile et multi-étoiles
 
 Le suivi est exécuté dans le module Android natif afin d’éviter de transférer
 chaque JPEG vers JavaScript. Toutes les 200 ms, il :
@@ -105,7 +106,13 @@ elle est adaptée au Live View couleur, compressé, gamma-corrigé et limité à
 est conservée afin d’éviter un saut vers une autre étoile. Une mesure saturée,
 de SNR insuffisant ou de diamètre incohérent n’est pas ajoutée à la trace.
 
-La position affichée est lissée par une régression linéaire sur la dernière
+En sélection automatique, le module suit jusqu’à 12 étoiles en parallèle. Il
+calcule le déplacement médian du groupe, rejette par MAD les vecteurs incohérents,
+puis combine les étoiles retenues avec une pondération fondée sur leur SNR et
+leur HFD. Le résultat redevient automatiquement mono-étoile si une seule source
+reste valide. Les étoiles trop proches du bord ne sont jamais sélectionnées.
+
+La position agrégée affichée est lissée par une régression linéaire sur la dernière
 seconde, ce qui réduit le bruit sans introduire le retard d’une moyenne mobile.
 Le verrouillage natif continue cependant d’utiliser les mesures brutes.
 
@@ -231,6 +238,8 @@ Un nouveau build Android reste obligatoire après une modification de :
 - vérifier la sélection automatique, son temps de réponse et le candidat choisi ;
 - comparer le bruit des positions brutes et filtrées sur une minute ;
 - vérifier le rejet des faux points et la droite robuste sur une séquence réelle ;
+- comparer l’angle et le bruit obtenus avec 1, 4, 8 et 12 étoiles ;
+- masquer plusieurs étoiles et vérifier le repli progressif jusqu’au suivi mono-étoile ;
 - valider le téléchargement et l’application d’une première mise à jour OTA.
 
 ### Alignement par dérive
@@ -268,6 +277,7 @@ Un nouveau build Android reste obligatoire après une modification de :
 ## Limites actuelles
 
 - seul le Sony A7R II avec Smart Remote Control a été testé ;
+- le suivi multi-étoiles nécessite l’APK natif `0.1.3` ou plus récent ;
 - la qualité du Live View reste limitée par ce que le boîtier transmet ;
 - le zoom de l’application n’ajoute aucun détail à l’image source ;
 - le suivi suppose une étoile suffisamment contrastée et peu de sources plus
