@@ -21,6 +21,7 @@ type DiagnosticRoute = {
 };
 
 type Point = { x: number; y: number };
+type TimedPoint = Point & { timestamp: number };
 type PreviewSize = { width: number; height: number };
 type RobustLineFit = {
   start: Point;
@@ -56,6 +57,34 @@ function median(values: number[]) {
   return sorted.length % 2 === 0
     ? (sorted[middle - 1] + sorted[middle]) / 2
     : sorted[middle];
+}
+
+/** Least-squares position at the latest timestamp; unlike a moving average it does not lag linear drift. */
+function predictTimedPoint(samples: TimedPoint[], timestamp: number): Point {
+  if (samples.length === 0) return { x: 0, y: 0 };
+  if (samples.length === 1) return samples[0];
+  const origin = samples[0].timestamp;
+  const times = samples.map((sample) => (sample.timestamp - origin) / 1000);
+  const targetTime = (timestamp - origin) / 1000;
+  const meanTime = times.reduce((sum, value) => sum + value, 0) / times.length;
+  const denominator = times.reduce((sum, value) => sum + (value - meanTime) ** 2, 0);
+  const predict = (coordinate: 'x' | 'y') => {
+    const mean = samples.reduce((sum, sample) => sum + sample[coordinate], 0) / samples.length;
+    if (denominator < 1e-9) return mean;
+    const slope = samples.reduce(
+      (sum, sample, index) => sum + (times[index] - meanTime) * (sample[coordinate] - mean),
+      0
+    ) / denominator;
+    return mean + slope * (targetTime - meanTime);
+  };
+  return { x: clamp(predict('x'), 0, 1), y: clamp(predict('y'), 0, 1) };
+}
+
+function medianTimedPoint(samples: TimedPoint[]): Point {
+  return {
+    x: median(samples.map((sample) => sample.x)),
+    y: median(samples.map((sample) => sample.y)),
+  };
 }
 
 function totalLeastSquares(points: Point[]) {
@@ -252,10 +281,16 @@ export default function App() {
   const [previewPan, setPreviewPan] = useState<Point>({ x: 0, y: 0 });
   const [selectedStar, setSelectedStar] = useState<Point | null>(null);
   const [trackingSample, setTrackingSample] = useState<SonyStarTrackingSample | null>(null);
+  const [filteredTrackingPoint, setFilteredTrackingPoint] = useState<Point | null>(null);
   const [trackingTrail, setTrackingTrail] = useState<Point[]>([]);
+  const [autoSelecting, setAutoSelecting] = useState(false);
   const previewSizeRef = useRef(previewSize);
   const previewZoomRef = useRef(previewZoom);
   const previewPanRef = useRef(previewPan);
+  const temporalSamplesRef = useRef<TimedPoint[]>([]);
+  const temporalBinRef = useRef<TimedPoint[]>([]);
+  const temporalBinStartedAtRef = useRef<number | null>(null);
+  const lastLockedAtRef = useRef<number | null>(null);
   const gestureRef = useRef({
     startedAt: 0,
     initialTouchCount: 0,
@@ -286,6 +321,15 @@ export default function App() {
     setPreviewPan(pan);
   }
 
+  function clearTemporalTracking(clearTrail: boolean) {
+    temporalSamplesRef.current = [];
+    temporalBinRef.current = [];
+    temporalBinStartedAtRef.current = null;
+    lastLockedAtRef.current = null;
+    setFilteredTrackingPoint(null);
+    if (clearTrail) setTrackingTrail([]);
+  }
+
   function resetPreviewNavigation() {
     previewZoomRef.current = 1;
     previewPanRef.current = { x: 0, y: 0 };
@@ -293,7 +337,8 @@ export default function App() {
     setPreviewPan({ x: 0, y: 0 });
     setSelectedStar(null);
     setTrackingSample(null);
-    setTrackingTrail([]);
+    setAutoSelecting(false);
+    clearTemporalTracking(true);
     camera?.clearStarTracking?.();
   }
 
@@ -310,8 +355,27 @@ export default function App() {
     };
     setSelectedStar(point);
     setTrackingSample(null);
-    setTrackingTrail([]);
+    setAutoSelecting(false);
+    clearTemporalTracking(true);
     camera?.setStarTrackingPoint?.(point.x, point.y, size.width, size.height);
+  }
+
+  function autoSelectStar() {
+    const size = previewSizeRef.current;
+    if (!camera?.autoSelectStar || size.width <= 0 || size.height <= 0) {
+      setLastError('La sélection automatique nécessite le nouveau module Android.');
+      return;
+    }
+    previewZoomRef.current = 1;
+    previewPanRef.current = { x: 0, y: 0 };
+    setPreviewZoom(1);
+    setPreviewPan({ x: 0, y: 0 });
+    setSelectedStar(null);
+    setTrackingSample(null);
+    clearTemporalTracking(true);
+    setLastError(null);
+    setAutoSelecting(true);
+    camera.autoSelectStar(size.width, size.height);
   }
 
   const previewResponder = useMemo(
@@ -402,8 +466,13 @@ export default function App() {
   }
 
   const trackedStarScreen = useMemo(
-    () => (trackingSample ? pointToScreen({ x: trackingSample.x, y: trackingSample.y }) : null),
-    [previewPan, previewSize, previewZoom, trackingSample]
+    () =>
+      filteredTrackingPoint
+        ? pointToScreen(filteredTrackingPoint)
+        : trackingSample
+          ? pointToScreen({ x: trackingSample.x, y: trackingSample.y })
+          : null,
+    [filteredTrackingPoint, previewPan, previewSize, previewZoom, trackingSample]
   );
 
   const trailOnScreen = useMemo(() => {
@@ -461,16 +530,76 @@ export default function App() {
     const trackingSubscription = camera.addListener('onStarTracked', (sample) => {
       setTrackingSample(sample);
       if (sample.locked) {
-        // Five samples per second, retained for a two-minute drift measurement.
-        setTrackingTrail((trail) => [...trail, { x: sample.x, y: sample.y }].slice(-600));
+        const point = { x: sample.x, y: sample.y, timestamp: sample.timestamp };
+        const previousLockedAt = lastLockedAtRef.current;
+        if (previousLockedAt !== null && sample.timestamp - previousLockedAt > 1500) {
+          temporalSamplesRef.current = [];
+          temporalBinRef.current = [];
+          temporalBinStartedAtRef.current = null;
+        }
+        lastLockedAtRef.current = sample.timestamp;
+
+        // A one-second linear regression smooths the displayed target while predicting
+        // the current position, avoiding the lag of a conventional moving average.
+        temporalSamplesRef.current = [...temporalSamplesRef.current, point].filter(
+          (entry) => entry.timestamp >= sample.timestamp - 1000
+        );
+        setFilteredTrackingPoint(predictTimedPoint(temporalSamplesRef.current, sample.timestamp));
+
+        // Independent one-second bins feed the drift fit, avoiding the overweighting
+        // caused by highly correlated rolling-average samples.
+        if (temporalBinStartedAtRef.current === null) {
+          temporalBinStartedAtRef.current = sample.timestamp;
+        }
+        temporalBinRef.current.push(point);
+        if (sample.timestamp - temporalBinStartedAtRef.current >= 1000) {
+          const completedBin = temporalBinRef.current;
+          if (completedBin.length >= 3) {
+            setTrackingTrail((trail) => [...trail, medianTimedPoint(completedBin)].slice(-120));
+          }
+          temporalBinRef.current = [];
+          temporalBinStartedAtRef.current = null;
+        }
+      } else if (
+        lastLockedAtRef.current !== null &&
+        sample.timestamp - lastLockedAtRef.current > 1000
+      ) {
+        temporalSamplesRef.current = [];
+        temporalBinRef.current = [];
+        temporalBinStartedAtRef.current = null;
+        setFilteredTrackingPoint(null);
+      }
+    });
+    const autoSelectionSubscription = camera.addListener('onStarAutoSelected', (result) => {
+      setAutoSelecting(false);
+      if (result.found) {
+        clearTemporalTracking(true);
+        setSelectedStar({ x: result.x, y: result.y });
+        setLastError(null);
+      } else {
+        setSelectedStar(null);
+        setLastError(
+          `Sélection automatique : ${result.reason ?? 'aucune étoile convenable'} (${result.candidateCount} candidats).`
+        );
       }
     });
 
     return () => {
       subscription.remove();
       trackingSubscription.remove();
+      autoSelectionSubscription.remove();
     };
   }, [camera]);
+
+  useEffect(() => {
+    if (!autoSelecting) return;
+    const timeout = setTimeout(() => {
+      camera?.clearStarTracking?.();
+      setAutoSelecting(false);
+      setLastError('La sélection automatique n’a pas répondu après 8 secondes.');
+    }, 8000);
+    return () => clearTimeout(timeout);
+  }, [autoSelecting, camera]);
 
   async function run(name: Operation, task: () => Promise<SonyCameraState>) {
     if (!camera) return;
@@ -737,10 +866,18 @@ export default function App() {
                   Droite robuste · {robustDriftLine.inlierCount}/{trackingTrail.length} points retenus
                 </Text>
               ) : null}
+              <Text style={styles.lineFitStatus}>
+                Filtre temporel 1 s · trace consolidée à 1 point/s
+              </Text>
+              <ActionButton
+                title={autoSelecting ? 'Recherche automatique…' : 'Sélection automatique'}
+                onPress={autoSelectStar}
+                disabled={autoSelecting}
+              />
               <ActionButton
                 title="Réinitialiser zoom et sélection"
                 onPress={resetPreviewNavigation}
-                disabled={previewZoom === 1 && selectedStar === null}
+                disabled={autoSelecting || (previewZoom === 1 && selectedStar === null)}
               />
             </View>
           ) : null}
