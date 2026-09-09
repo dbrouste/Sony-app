@@ -35,6 +35,8 @@ type RobustLineFit = {
   inliers: boolean[];
   inlierCount: number;
   rmsPixels: number;
+  angleDegrees: number;
+  angleUncertaintyDegrees: number;
 };
 type DriftTrend = {
   slopePixelsPerMinute: number;
@@ -316,6 +318,14 @@ function fitRobustLine(points: Point[], size: PreviewSize): RobustLineFit | null
     x: (line!.center.x + projection * line!.direction.x) / size.width,
     y: (line!.center.y + projection * line!.direction.y) / size.height,
   });
+  const rmsPixels = Math.sqrt(
+    acceptedDistances.reduce((sum, distance) => sum + distance ** 2, 0) /
+      acceptedDistances.length
+  );
+  const longitudinalEnergy = projections.reduce(
+    (sum, projection) => sum + projection ** 2,
+    0
+  );
   return {
     start: endpoint(minimum),
     end: endpoint(maximum),
@@ -324,10 +334,12 @@ function fitRobustLine(points: Point[], size: PreviewSize): RobustLineFit | null
     imageSize: size,
     inliers,
     inlierCount: inliers.filter(Boolean).length,
-    rmsPixels: Math.sqrt(
-      acceptedDistances.reduce((sum, distance) => sum + distance ** 2, 0) /
-        acceptedDistances.length
-    ),
+    rmsPixels,
+    angleDegrees: (Math.atan2(line.direction.y, line.direction.x) * 180) / Math.PI,
+    angleUncertaintyDegrees:
+      longitudinalEnergy > 1e-6
+        ? (Math.atan(rmsPixels / Math.sqrt(longitudinalEnergy)) * 180) / Math.PI
+        : 90,
   };
 }
 
@@ -1173,7 +1185,7 @@ export default function App() {
                   {'\n'}SNR relatif {trackingSample.snr.toFixed(1)} · HFD{' '}
                   {trackingSample.hfd.toFixed(2)} px · masse {trackingSample.mass.toFixed(0)}
                   {(trackingSample.starCount ?? 1) > 1
-                    ? `\nConsensus ${trackingSample.inlierStarCount ?? 0}/${trackingSample.starCount} étoiles`
+                    ? `\nConsensus ${trackingSample.inlierStarCount ?? 0}/${trackingSample.starCount} étoiles · traitement ${(trackingSample.processingMs ?? 0).toFixed(0)} ms`
                     : ''}
                   {trackingSample.saturated ? '\nÉTOILE SATURÉE — choisir une étoile moins brillante' : ''}
                 </Text>
@@ -1224,6 +1236,8 @@ export default function App() {
                       <Text style={styles.lineFitStatus}>
                         Droite mobile · {robustDriftLine.inlierCount}/{trackingTrail.length} points · RMS{' '}
                         {robustDriftLine.rmsPixels.toFixed(2)} px
+                        {'\n'}Angle {robustDriftLine.angleDegrees.toFixed(2)}° ±{' '}
+                        {robustDriftLine.angleUncertaintyDegrees.toFixed(2)}°
                       </Text>
                     ) : (
                       <Text style={styles.alignmentInstruction}>
@@ -1250,6 +1264,8 @@ export default function App() {
                     <Text style={styles.referenceStatus}>
                       RÉFÉRENCE FIGÉE · {referenceLine.inlierCount}/{trackingTrail.length} points · RMS{' '}
                       {referenceLine.rmsPixels.toFixed(2)} px
+                      {'\n'}Angle {referenceLine.angleDegrees.toFixed(2)}° ±{' '}
+                      {referenceLine.angleUncertaintyDegrees.toFixed(2)}°
                     </Text>
                     <Text style={styles.alignmentInstruction}>
                       Démarre maintenant le suivi sidéral de l’AstroTrac, puis lance la mesure.
