@@ -142,7 +142,10 @@ L’assistant impose trois phases distinctes :
 
 Une position médiane est mesurée chaque seconde. Une régression temporelle robuste
 affiche la pente en pixels par minute, l’écart signé courant, le RMS et le nombre
-de points retenus. Un segment orange matérialise l’écart perpendiculaire sur
+de points retenus. La droite de référence indique également son angle et une
+estimation de l’incertitude angulaire. En mode multi-étoiles, le temps de
+traitement natif est affiché afin de vérifier qu’il reste inférieur à la cadence
+de 200 ms. Un segment orange matérialise l’écart perpendiculaire sur
 l’image. Les valeurs utilisent les pixels du JPEG Sony et ne dépendent donc pas
 du zoom d’affichage.
 
