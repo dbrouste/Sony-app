@@ -22,13 +22,15 @@ sélectionner une étoile et suit sa position afin de mesurer sa dérive.
 | Zoom tactile et boutons +/− | Validé | Zoom d’affichage de ×1 à ×10 |
 | Déplacement dans l’image zoomée | Validé | Glissement à un doigt |
 | Sélection d’une étoile par toucher | Validée | Les coordonnées tiennent compte du zoom et du déplacement |
-| Sélection automatique d’une étoile | Implémentée, à tester sur le ciel | Recherche native dans la zone visible, rejet du bord et des sources invalides |
-| Suivi du centroïde de l’étoile | Nouvel estimateur implémenté, à tester | Calcul natif Android à 5 mesures/s, inspiré de PHD2 |
-| Filtrage temporel sur 1 seconde | Implémenté, à tester sur le ciel | Régression pour l’affichage et médiane par seconde pour la trace |
+| Sélection automatique d’une étoile | Validée sur le ciel | Recherche native, rejet du bord, des sources saturées et des faux candidats |
+| Suivi du centroïde de l’étoile | Validé sur le ciel | Calcul natif Android à 5 mesures/s, inspiré de PHD2 |
+| Filtrage temporel sur 1 seconde | Validé sur le ciel | Régression pour l’affichage et médiane par seconde pour la trace |
 | Qualité Live View maximale | Implémentée, à confirmer | Demande de taille Sony `M` si disponible, sinon repli automatique |
 | Réduction de la latence d’affichage | Implémentée, à tester | Les anciennes images sont abandonnées au lieu d’être mises en file |
-| Trace de déplacement de l’étoile | Implémentée, à tester sur le ciel | Jusqu’à 600 points, soit environ 2 minutes |
-| Droite robuste de la trace | Implémentée, à tester sur le ciel | Ajustement robuste et rejet des points aberrants |
+| Trace de déplacement de l’étoile | Validée sur le ciel | Jusqu’à 120 points, soit environ 2 minutes |
+| Droite robuste de la trace | Validée sur le ciel | Ajustement robuste et rejet des points aberrants |
+| Référence monture arrêtée | Implémentée, à tester | Acquisition guidée puis gel de la droite robuste |
+| Mesure de dérive signée | Implémentée, à tester | Écart perpendiculaire et pente robuste en pixels par minute |
 | EAS Update | Configuré, nouveau build requis | Le premier APK compatible OTA doit encore être construit et installé |
 | Guidage azimut/altitude complet | À développer | Voir la feuille de route |
 
@@ -43,9 +45,8 @@ Le fonctionnement visé reprend la méthode proposée pour l’AstroTrac :
 4. mesurer l’écart perpendiculaire de l’étoile par rapport à cette droite ;
 5. ajuster l’azimut ou l’altitude jusqu’à ce que cet écart reste stable.
 
-L’application sait déjà sélectionner et suivre l’étoile ainsi qu’approximer sa
-trace. Les étapes séparant explicitement l’acquisition de la droite de référence
-et la mesure de dérive restent à ajouter.
+L’application sépare désormais l’acquisition de la trace, le gel de la droite de
+référence et la mesure de dérive lorsque le suivi sidéral est redémarré.
 
 ## Fonctions actuellement disponibles
 
@@ -123,6 +124,20 @@ La droite cyan n’apparaît qu’après un nombre suffisant de mesures cohéren
 Les passages nuageux, pertes momentanées de verrouillage ou faux centroïdes
 doivent ainsi avoir moins d’influence sur la direction calculée.
 
+### Mesure de dérive
+
+L’assistant impose trois phases distinctes :
+
+1. **Acquérir la référence** avec l’AstroTrac arrêté pendant au moins 12 secondes ;
+2. **Figer la référence**, puis démarrer le suivi sidéral de l’AstroTrac ;
+3. **Démarrer la mesure** pour calculer l’écart signé à la droite figée.
+
+Une position médiane est mesurée chaque seconde. Une régression temporelle robuste
+affiche la pente en pixels par minute, l’écart signé courant, le RMS et le nombre
+de points retenus. Un segment orange matérialise l’écart perpendiculaire sur
+l’image. Les valeurs utilisent les pixels du JPEG Sony et ne dépendent donc pas
+du zoom d’affichage.
+
 ## Utilisation sur le terrain
 
 1. Sur le Sony, lancer **Smart Remote Control**.
@@ -132,10 +147,13 @@ doivent ainsi avoir moins d’influence sur la direction calculée.
 5. Appuyer sur **Connexion Wi-Fi Sony**.
 6. Attendre l’état `ready`.
 7. Appuyer sur **Démarrer Live View**.
-8. Zoomer, centrer une étoile assez brillante et la toucher.
-9. Vérifier l’indication **ÉTOILE VERROUILLÉE** et observer `dx`, `dy`,
-   contraste et bruit.
-10. Pour le moment, interpréter la trace et la droite manuellement.
+8. Utiliser **Sélection automatique** ou toucher une étoile après avoir zoomé.
+9. Vérifier l’indication **ÉTOILE VERROUILLÉE**.
+10. Arrêter l’AstroTrac et appuyer sur **1. Acquérir la référence**.
+11. Après au moins 12 secondes, appuyer sur **Figer la référence**.
+12. Démarrer le suivi sidéral de l’AstroTrac, puis appuyer sur
+    **2. Démarrer la mesure**.
+13. Observer la dérive en pixels par minute et l’écart orange à la droite figée.
 
 ## Diagnostics
 
@@ -211,11 +229,11 @@ Un nouveau build Android reste obligatoire après une modification de :
 ### Alignement par dérive
 
 - ajouter un écran ou un assistant distinguant **Azimut** et **Altitude** ;
-- ajouter une phase **Monture arrêtée : acquisition de la référence** ;
-- figer la droite de référence avant de redémarrer la monture ;
-- ajouter une phase **Monture en suivi : mesure de la dérive** ;
-- calculer la distance perpendiculaire signée à la droite et son évolution dans
-  le temps ;
+- [x] ajouter une phase **Monture arrêtée : acquisition de la référence** ;
+- [x] figer la droite de référence avant de redémarrer la monture ;
+- [x] ajouter une phase **Monture en suivi : mesure de la dérive** ;
+- [x] calculer la distance perpendiculaire signée à la droite et son évolution
+  dans le temps ;
 - afficher une courbe de dérive, une stabilité et une incertitude ;
 - convertir la dérive en consigne de correction azimut/altitude ;
 - tenir compte de l’orientation de l’image pour éviter une indication de sens
@@ -247,7 +265,7 @@ Un nouveau build Android reste obligatoire après une modification de :
 - le zoom de l’application n’ajoute aucun détail à l’image source ;
 - le suivi suppose une étoile suffisamment contrastée et peu de sources plus
   lumineuses à proximité ;
-- la droite calculée représente une trajectoire d’image, pas encore une
-  correction polaire directement exploitable ;
+- la pente est exprimée en pixels par minute ; elle n’est pas encore convertie
+  en consigne de correction azimut/altitude ;
 - les correctifs du module sont appliqués dans `node_modules` par
   `patch-package` après chaque installation.
