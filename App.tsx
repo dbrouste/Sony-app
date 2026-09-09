@@ -652,6 +652,15 @@ export default function App() {
     [filteredTrackingPoint, previewPan, previewSize, previewZoom, trackingSample]
   );
 
+  const trackedStarsOnScreen = useMemo(
+    () =>
+      (trackingSample?.stars ?? []).map((star) => ({
+        ...star,
+        point: pointToScreen(star),
+      })),
+    [previewPan, previewSize, previewZoom, trackingSample]
+  );
+
   const trailOnScreen = useMemo(() => {
     const displayStep = Math.max(1, Math.ceil(trackingTrail.length / 120));
     return trackingTrail
@@ -1025,6 +1034,25 @@ export default function App() {
               />
             ))}
 
+            {trackedStarsOnScreen.map((star) => (
+              <View
+                key={star.id}
+                pointerEvents="none"
+                style={[
+                  styles.multiStarTarget,
+                  !star.locked
+                    ? styles.multiStarTargetLost
+                    : !star.used
+                      ? styles.multiStarTargetRejected
+                      : null,
+                  {
+                    left: star.point.x - 6,
+                    top: star.point.y - 6,
+                  },
+                ]}
+              />
+            ))}
+
             {trackedStarScreen ? (
               <View
                 pointerEvents="none"
@@ -1132,13 +1160,21 @@ export default function App() {
                     styles.trackingStatus,
                     !trackingSample.locked && styles.trackingStatusLost,
                   ]}>
-                  {trackingSample.locked ? 'ÉTOILE VERROUILLÉE' : 'ÉTOILE PERDUE'} · dx{' '}
+                  {(trackingSample.starCount ?? 1) > 1
+                    ? `${trackingSample.lockedStarCount ?? 0}/${trackingSample.starCount} ÉTOILES VERROUILLÉES`
+                    : trackingSample.locked
+                      ? 'ÉTOILE VERROUILLÉE'
+                      : 'ÉTOILE PERDUE'}{' '}
+                  · dx{' '}
                   {trackingSample.dxPixels.toFixed(2)} px · dy {trackingSample.dyPixels.toFixed(2)} px
                   {'\n'}Image {trackingSample.frameWidth}×{trackingSample.frameHeight} · contraste{' '}
                   {trackingSample.contrast.toFixed(1)} · bruit {trackingSample.noise.toFixed(1)} · fond{' '}
                   {trackingSample.background.toFixed(1)}
                   {'\n'}SNR relatif {trackingSample.snr.toFixed(1)} · HFD{' '}
                   {trackingSample.hfd.toFixed(2)} px · masse {trackingSample.mass.toFixed(0)}
+                  {(trackingSample.starCount ?? 1) > 1
+                    ? `\nConsensus ${trackingSample.inlierStarCount ?? 0}/${trackingSample.starCount} étoiles`
+                    : ''}
                   {trackingSample.saturated ? '\nÉTOILE SATURÉE — choisir une étoile moins brillante' : ''}
                 </Text>
               ) : selectedStar ? (
@@ -1148,7 +1184,11 @@ export default function App() {
                 Filtre temporel 1 s · trace consolidée à 1 point/s
               </Text>
               <ActionButton
-                title={autoSelecting ? 'Recherche automatique…' : 'Sélection automatique'}
+                title={
+                  autoSelecting
+                    ? 'Recherche automatique…'
+                    : 'Sélection automatique (1 à 12 étoiles)'
+                }
                 onPress={autoSelectStar}
                 disabled={autoSelecting}
               />
@@ -1509,6 +1549,23 @@ const styles = StyleSheet.create({
     height: 6,
     borderRadius: 3,
     backgroundColor: '#ff8a65',
+  },
+  multiStarTarget: {
+    position: 'absolute',
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#54e397',
+    backgroundColor: 'rgba(84, 227, 151, 0.15)',
+  },
+  multiStarTargetLost: {
+    borderColor: '#ff6b6b',
+    backgroundColor: 'rgba(255, 107, 107, 0.12)',
+  },
+  multiStarTargetRejected: {
+    borderColor: '#f4c95d',
+    backgroundColor: 'rgba(244, 201, 93, 0.12)',
   },
   driftLine: {
     position: 'absolute',
