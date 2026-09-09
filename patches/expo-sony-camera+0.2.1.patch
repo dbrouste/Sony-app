@@ -12,10 +12,10 @@ index 18b5959..2680983 100644
              }
              lastFrameJpeg = jpeg
 diff --git a/node_modules/expo-sony-camera/android/src/main/java/expo/modules/sonycamera/SonyCameraModule.kt b/node_modules/expo-sony-camera/android/src/main/java/expo/modules/sonycamera/SonyCameraModule.kt
-index 015b9a8..b5e9b53 100644
+index 015b9a8..c512204 100644
 --- a/node_modules/expo-sony-camera/android/src/main/java/expo/modules/sonycamera/SonyCameraModule.kt
 +++ b/node_modules/expo-sony-camera/android/src/main/java/expo/modules/sonycamera/SonyCameraModule.kt
-@@ -1,16 +1,78 @@
+@@ -1,16 +1,91 @@
  package expo.modules.sonycamera
  
  import android.content.Intent
@@ -35,11 +35,12 @@ index 015b9a8..b5e9b53 100644
 +  private val trackingFramePending = AtomicBoolean(false)
 +  private val trackingLock = Any()
 +  @Volatile private var lastTrackingFrameAt = 0L
-+  private var trackingTarget: TrackingTarget? = null
++  private var trackingTargets: List<TrackingTarget> = emptyList()
 +  private var autoSelectionRequest: AutoSelectionRequest? = null
 +  private var trackingGeneration = 0L
 +
 +  private data class TrackingTarget(
++    val id: Int,
 +    val generation: Long,
 +    val referenceX: Double,
 +    val referenceY: Double,
@@ -86,6 +87,18 @@ index 015b9a8..b5e9b53 100644
 +    val apertureRadius: Int,
 +    val locked: Boolean,
 +  )
++
++  private data class TrackedStar(
++    val target: TrackingTarget,
++    val measurement: StarMeasurement?,
++    val locked: Boolean,
++    val foundX: Double,
++    val foundY: Double,
++    val referenceX: Double,
++    val referenceY: Double,
++    val viewX: Double,
++    val viewY: Double,
++  )
  
    override fun definition() = ModuleDefinition {
      Name("SonyCamera")
@@ -95,7 +108,7 @@ index 015b9a8..b5e9b53 100644
  
      OnCreate {
        val context = requireNotNull(appContext.reactContext)
-@@ -27,6 +89,7 @@ class SonyCameraModule : Module(), SonyCameraController.Listener {
+@@ -27,6 +102,7 @@ class SonyCameraModule : Module(), SonyCameraController.Listener {
      OnDestroy {
        controller.removeListener(this@SonyCameraModule)
        controller.close()
@@ -103,7 +116,7 @@ index 015b9a8..b5e9b53 100644
        if (SonyCameraRegistry.controller === controller) SonyCameraRegistry.controller = null
      }
  
-@@ -48,6 +111,43 @@ class SonyCameraModule : Module(), SonyCameraController.Listener {
+@@ -48,6 +124,44 @@ class SonyCameraModule : Module(), SonyCameraController.Listener {
      AsyncFunction("focusAt") { x: Double, y: Double, viewWidth: Double, viewHeight: Double ->
        controller.focusAtBlocking(x, y, viewWidth, viewHeight)
      }
@@ -112,7 +125,8 @@ index 015b9a8..b5e9b53 100644
 +      synchronized(trackingLock) {
 +        trackingGeneration += 1
 +        autoSelectionRequest = null
-+        trackingTarget = TrackingTarget(
++        trackingTargets = listOf(TrackingTarget(
++          id = 0,
 +          generation = trackingGeneration,
 +          referenceX = x.coerceIn(0.0, 1.0),
 +          referenceY = y.coerceIn(0.0, 1.0),
@@ -120,7 +134,7 @@ index 015b9a8..b5e9b53 100644
 +          currentY = y.coerceIn(0.0, 1.0),
 +          viewWidth = viewWidth,
 +          viewHeight = viewHeight,
-+        )
++        ))
 +      }
 +      lastTrackingFrameAt = 0L
 +    }
@@ -128,7 +142,7 @@ index 015b9a8..b5e9b53 100644
 +      require(viewWidth > 0.0 && viewHeight > 0.0) { "Preview dimensions must be positive." }
 +      synchronized(trackingLock) {
 +        trackingGeneration += 1
-+        trackingTarget = null
++        trackingTargets = emptyList()
 +        autoSelectionRequest = AutoSelectionRequest(
 +          generation = trackingGeneration,
 +          viewWidth = viewWidth,
@@ -140,14 +154,14 @@ index 015b9a8..b5e9b53 100644
 +    Function("clearStarTracking") {
 +      synchronized(trackingLock) {
 +        trackingGeneration += 1
-+        trackingTarget = null
++        trackingTargets = emptyList()
 +        autoSelectionRequest = null
 +      }
 +    }
  
      View(SonyCameraView::class) {
        Prop("active") { view: SonyCameraView, active: Boolean -> view.setActive(active) }
-@@ -67,7 +167,454 @@ class SonyCameraModule : Module(), SonyCameraController.Listener {
+@@ -67,7 +181,552 @@ class SonyCameraModule : Module(), SonyCameraController.Listener {
      sendEvent("onPhotoCaptured", payload)
    }
  
@@ -155,7 +169,7 @@ index 015b9a8..b5e9b53 100644
 +  override fun onFrame(jpeg: ByteArray) {
 +    val now = SystemClock.elapsedRealtime()
 +    if (now - lastTrackingFrameAt < TRACKING_INTERVAL_MS) return
-+    val hasWork = synchronized(trackingLock) { trackingTarget != null || autoSelectionRequest != null }
++    val hasWork = synchronized(trackingLock) { trackingTargets.isNotEmpty() || autoSelectionRequest != null }
 +    if (!hasWork || !trackingFramePending.compareAndSet(false, true)) return
 +    lastTrackingFrameAt = now
 +    trackingExecutor.execute {
@@ -349,7 +363,7 @@ index 015b9a8..b5e9b53 100644
 +    )
 +  }
 +
-+  /** Find the best non-saturated, isolated stellar source in the visible preview. */
++  /** Find up to 12 non-saturated, isolated stellar sources away from the image edges. */
 +  private fun analyseAutoSelectionFrame(bitmap: Bitmap, request: AutoSelectionRequest) {
 +    val width = bitmap.width
 +    val height = bitmap.height
@@ -357,13 +371,14 @@ index 015b9a8..b5e9b53 100644
 +    val scale = maxOf(request.viewWidth / width, request.viewHeight / height)
 +    val cropX = (width * scale - request.viewWidth) / 2.0
 +    val cropY = (height * scale - request.viewHeight) / 2.0
-+    val safetyMargin = maxOf(20, minOf(width, height) / 30)
++    // Leave enough room for the centroid aperture and for several seconds of drift.
++    val safetyMargin = maxOf(32, minOf(width, height) / 12)
 +    val visibleLeft = maxOf(1, (cropX / scale).toInt() + safetyMargin)
 +    val visibleRight = minOf(width - 2, ((request.viewWidth + cropX) / scale).toInt() - safetyMargin)
 +    val visibleTop = maxOf(1, (cropY / scale).toInt() + safetyMargin)
 +    val visibleBottom = minOf(height - 2, ((request.viewHeight + cropY) / scale).toInt() - safetyMargin)
 +    if (visibleRight <= visibleLeft || visibleBottom <= visibleTop) {
-+      completeAutoSelection(request, null, scale, cropX, cropY, 0, "Visible preview is too small.")
++      completeAutoSelection(request, emptyList(), scale, cropX, cropY, 0, "Visible preview is too small.")
 +      return
 +    }
 +
@@ -375,7 +390,7 @@ index 015b9a8..b5e9b53 100644
 +    }
 +    val background = robustBackground(backgroundSamples)
 +    if (background == null) {
-+      completeAutoSelection(request, null, scale, cropX, cropY, 0, "Unable to measure the image background.")
++      completeAutoSelection(request, emptyList(), scale, cropX, cropY, 0, "Unable to measure the image background.")
 +      return
 +    }
 +    val detectionThreshold = background.mean + maxOf(4.0, 4.0 * background.sigma)
@@ -419,52 +434,63 @@ index 015b9a8..b5e9b53 100644
 +      if (separated.size >= MAX_AUTO_STARS_TO_MEASURE) break
 +    }
 +
-+    var best: StarMeasurement? = null
-+    var bestScore = Double.NEGATIVE_INFINITY
++    val measured = mutableListOf<Pair<StarMeasurement, Double>>()
 +    for (candidate in separated) {
 +      val measurement = measureStarAtPeak(bitmap, candidate.x, candidate.y, candidate.value, background)
 +      if (!measurement.locked) continue
 +      val score = measurement.snr * kotlin.math.sqrt(maxOf(1.0, measurement.mass))
-+      if (score > bestScore) {
-+        best = measurement
-+        bestScore = score
-+      }
++      measured.add(measurement to score)
 +    }
++    val selected = measured.sortedByDescending { it.second }.take(MAX_TRACKING_STARS).map { it.first }
 +    completeAutoSelection(
 +      request,
-+      best,
++      selected,
 +      scale,
 +      cropX,
 +      cropY,
 +      separated.size,
-+      if (best == null) "No suitable unsaturated star was found." else null,
++      if (selected.isEmpty()) "No suitable unsaturated star was found." else null,
 +    )
 +  }
 +
 +  private fun completeAutoSelection(
 +    request: AutoSelectionRequest,
-+    measurement: StarMeasurement?,
++    measurements: List<StarMeasurement>,
 +    scale: Double,
 +    cropX: Double,
 +    cropY: Double,
 +    candidateCount: Int,
 +    reason: String?,
 +  ) {
-+    val found = measurement != null
-+    val viewX = measurement?.let { ((it.x * scale - cropX) / request.viewWidth).coerceIn(0.0, 1.0) } ?: 0.0
-+    val viewY = measurement?.let { ((it.y * scale - cropY) / request.viewHeight).coerceIn(0.0, 1.0) } ?: 0.0
++    val found = measurements.isNotEmpty()
++    val selectedStars = measurements.mapIndexed { index, measurement ->
++      mapOf(
++        "id" to index,
++        "x" to ((measurement.x * scale - cropX) / request.viewWidth).coerceIn(0.0, 1.0),
++        "y" to ((measurement.y * scale - cropY) / request.viewHeight).coerceIn(0.0, 1.0),
++        "snr" to measurement.snr,
++        "hfd" to measurement.hfd,
++        "mass" to measurement.mass,
++      )
++    }
++    val primary = selectedStars.firstOrNull()
++    val viewX = primary?.get("x") as? Double ?: 0.0
++    val viewY = primary?.get("y") as? Double ?: 0.0
 +    val stillCurrent = synchronized(trackingLock) {
 +      if (autoSelectionRequest?.generation != request.generation) {
 +        false
 +      } else {
 +        autoSelectionRequest = null
-+        if (measurement != null) {
-+          trackingTarget = TrackingTarget(
++        trackingTargets = selectedStars.map { star ->
++          val starX = star["x"] as Double
++          val starY = star["y"] as Double
++          TrackingTarget(
++            id = star["id"] as Int,
 +            generation = request.generation,
-+            referenceX = viewX,
-+            referenceY = viewY,
-+            currentX = viewX,
-+            currentY = viewY,
++            referenceX = starX,
++            referenceY = starY,
++            currentX = starX,
++            currentY = starY,
 +            viewWidth = request.viewWidth,
 +            viewHeight = request.viewHeight,
 +          )
@@ -480,12 +506,91 @@ index 015b9a8..b5e9b53 100644
 +        "x" to viewX,
 +        "y" to viewY,
 +        "candidateCount" to candidateCount,
++        "selectedCount" to selectedStars.size,
++        "stars" to selectedStars,
 +        "reason" to reason,
-+        "snr" to (measurement?.snr ?: 0.0),
-+        "hfd" to (measurement?.hfd ?: 0.0),
-+        "mass" to (measurement?.mass ?: 0.0),
++        "snr" to (measurements.firstOrNull()?.snr ?: 0.0),
++        "hfd" to (measurements.firstOrNull()?.hfd ?: 0.0),
++        "mass" to (measurements.firstOrNull()?.mass ?: 0.0),
 +      ),
 +    )
++  }
++
++  private fun trackOneStar(bitmap: Bitmap, target: TrackingTarget): TrackedStar {
++    val width = bitmap.width
++    val height = bitmap.height
++    val scale = maxOf(target.viewWidth / width, target.viewHeight / height)
++    val cropX = (width * scale - target.viewWidth) / 2.0
++    val cropY = (height * scale - target.viewHeight) / 2.0
++    fun viewToImageX(value: Double) =
++      ((value * target.viewWidth + cropX) / scale).coerceIn(0.0, width - 1.0)
++    fun viewToImageY(value: Double) =
++      ((value * target.viewHeight + cropY) / scale).coerceIn(0.0, height - 1.0)
++
++    val centerX = viewToImageX(target.currentX)
++    val centerY = viewToImageY(target.currentY)
++    val imageReferenceX = viewToImageX(target.referenceX)
++    val imageReferenceY = viewToImageY(target.referenceY)
++    // A smaller local window keeps 12-star tracking comfortably below the 200 ms cadence.
++    val radius = maxOf(18, minOf(width, height) / 18)
++    val left = maxOf(0, centerX.toInt() - radius)
++    val right = minOf(width - 1, centerX.toInt() + radius)
++    val top = maxOf(0, centerY.toInt() - radius)
++    val bottom = minOf(height - 1, centerY.toInt() + radius)
++    val coarseBackgroundSamples = mutableListOf<Double>()
++    for (py in top..bottom step 2) {
++      for (px in left..right step 2) {
++        coarseBackgroundSamples.add(luminance(bitmap.getPixel(px, py)))
++      }
++    }
++    val coarseBackground = robustBackground(coarseBackgroundSamples)
++    if (coarseBackground == null) {
++      return TrackedStar(
++        target, null, false, centerX, centerY, imageReferenceX, imageReferenceY,
++        target.currentX, target.currentY,
++      )
++    }
++
++    val attractionSigma = maxOf(7.0, radius / 3.0)
++    var peakX = centerX.toInt()
++    var peakY = centerY.toInt()
++    var smoothedPeak = coarseBackground.mean
++    var peakScore = Double.NEGATIVE_INFINITY
++    for (py in maxOf(1, top)..minOf(height - 2, bottom)) {
++      for (px in maxOf(1, left)..minOf(width - 2, right)) {
++        val candidate = smoothedLuminance(bitmap, px, py)
++        val dx = px - centerX
++        val dy = py - centerY
++        val proximity = kotlin.math.exp(
++          -(dx * dx + dy * dy) / (2.0 * attractionSigma * attractionSigma),
++        )
++        val score = (candidate - coarseBackground.mean) * proximity
++        if (score > peakScore) {
++          peakScore = score
++          smoothedPeak = candidate
++          peakX = px
++          peakY = py
++        }
++      }
++    }
++
++    val measurement = measureStarAtPeak(bitmap, peakX, peakY, smoothedPeak, coarseBackground)
++    val locked = measurement.locked
++    val foundX = if (locked) measurement.x else centerX
++    val foundY = if (locked) measurement.y else centerY
++    val viewX = ((foundX * scale - cropX) / target.viewWidth).coerceIn(0.0, 1.0)
++    val viewY = ((foundY * scale - cropY) / target.viewHeight).coerceIn(0.0, 1.0)
++    return TrackedStar(
++      target, measurement, locked, foundX, foundY, imageReferenceX, imageReferenceY,
++      viewX, viewY,
++    )
++  }
++
++  private fun median(values: List<Double>): Double {
++    if (values.isEmpty()) return 0.0
++    val sorted = values.sorted()
++    val middle = sorted.size / 2
++    return if (sorted.size % 2 == 0) (sorted[middle - 1] + sorted[middle]) / 2.0 else sorted[middle]
 +  }
 +
 +  private fun analyseTrackingFrame(jpeg: ByteArray) {
@@ -499,92 +604,98 @@ index 015b9a8..b5e9b53 100644
 +        analyseAutoSelectionFrame(bitmap, autoRequest)
 +        return
 +      }
-+      val target = synchronized(trackingLock) { trackingTarget?.copy() } ?: return
-+
-+      val scale = maxOf(target.viewWidth / width, target.viewHeight / height)
-+      val renderedWidth = width * scale
-+      val renderedHeight = height * scale
-+      val cropX = (renderedWidth - target.viewWidth) / 2.0
-+      val cropY = (renderedHeight - target.viewHeight) / 2.0
-+      fun viewToImageX(value: Double) = ((value * target.viewWidth + cropX) / scale).coerceIn(0.0, width - 1.0)
-+      fun viewToImageY(value: Double) = ((value * target.viewHeight + cropY) / scale).coerceIn(0.0, height - 1.0)
-+
-+      val centerX = viewToImageX(target.currentX)
-+      val centerY = viewToImageY(target.currentY)
-+      val radius = maxOf(24, minOf(width, height) / 10)
-+      val left = maxOf(0, centerX.toInt() - radius)
-+      val right = minOf(width - 1, centerX.toInt() + radius)
-+      val top = maxOf(0, centerY.toInt() - radius)
-+      val bottom = minOf(height - 1, centerY.toInt() + radius)
-+
-+      val coarseBackgroundSamples = mutableListOf<Double>()
-+      for (py in top..bottom step 2) {
-+        for (px in left..right step 2) {
-+          coarseBackgroundSamples.add(luminance(bitmap.getPixel(px, py)))
-+        }
-+      }
-+      val coarseBackground = robustBackground(coarseBackgroundSamples) ?: return
-+
-+      // Prefer the bright source closest to the user's tap/current centroid. This avoids
-+      // jumping to another, brighter star elsewhere in the search window. Peak detection
-+      // uses PHD2's weighted 3x3 smoothing so isolated JPEG noise is less attractive.
-+      val attractionSigma = maxOf(8.0, radius / 3.0)
-+      var peakX = centerX.toInt()
-+      var peakY = centerY.toInt()
-+      var smoothedPeak = coarseBackground.mean
-+      var peakScore = Double.NEGATIVE_INFINITY
-+      for (py in maxOf(1, top)..minOf(height - 2, bottom)) {
-+        for (px in maxOf(1, left)..minOf(width - 2, right)) {
-+          val candidate = smoothedLuminance(bitmap, px, py)
-+          val dx = px - centerX
-+          val dy = py - centerY
-+          val proximity = kotlin.math.exp(-(dx * dx + dy * dy) / (2.0 * attractionSigma * attractionSigma))
-+          val score = (candidate - coarseBackground.mean) * proximity
-+          if (score > peakScore) {
-+            peakScore = score
-+            smoothedPeak = candidate
-+            peakX = px
-+            peakY = py
-+          }
-+        }
-+      }
-+
-+      val measurement = measureStarAtPeak(bitmap, peakX, peakY, smoothedPeak, coarseBackground)
-+      val locked = measurement.locked
-+      val foundX = if (locked) measurement.x else centerX
-+      val foundY = if (locked) measurement.y else centerY
-+      val imageReferenceX = viewToImageX(target.referenceX)
-+      val imageReferenceY = viewToImageY(target.referenceY)
-+      val viewX = ((foundX * scale - cropX) / target.viewWidth).coerceIn(0.0, 1.0)
-+      val viewY = ((foundY * scale - cropY) / target.viewHeight).coerceIn(0.0, 1.0)
++      val targets = synchronized(trackingLock) { trackingTargets.map { it.copy() } }
++      if (targets.isEmpty()) return
++      val generation = targets.first().generation
++      val tracked = targets.map { target -> trackOneStar(bitmap, target) }
 +      val stillCurrent = synchronized(trackingLock) {
-+        trackingTarget?.generation == target.generation
++        trackingTargets.isNotEmpty() && trackingTargets.first().generation == generation
 +      }
 +      if (!stillCurrent) return
-+      if (locked) {
-+        synchronized(trackingLock) {
-+          trackingTarget?.takeIf { it.generation == target.generation }?.let {
-+            it.currentX = viewX
-+            it.currentY = viewY
++
++      synchronized(trackingLock) {
++        for (result in tracked.filter { it.locked }) {
++          trackingTargets.find { it.generation == generation && it.id == result.target.id }?.let {
++            it.currentX = result.viewX
++            it.currentY = result.viewY
 +          }
 +        }
++      }
++
++      val lockedStars = tracked.filter { it.locked && it.measurement != null }
++      val medianDx = median(lockedStars.map { it.foundX - it.referenceX })
++      val medianDy = median(lockedStars.map { it.foundY - it.referenceY })
++      val vectorResiduals = lockedStars.map { star ->
++        kotlin.math.hypot(
++          (star.foundX - star.referenceX) - medianDx,
++          (star.foundY - star.referenceY) - medianDy,
++        )
++      }
++      val residualMedian = median(vectorResiduals)
++      val residualMad = median(vectorResiduals.map { kotlin.math.abs(it - residualMedian) })
++      val vectorThreshold = maxOf(1.0, residualMedian + 3.0 * 1.4826 * residualMad)
++      val inlierStars = lockedStars.filterIndexed { index, _ -> vectorResiduals[index] <= vectorThreshold }
++      val usedStars = if (inlierStars.isNotEmpty()) inlierStars else lockedStars
++      fun weight(star: TrackedStar): Double {
++        val measurement = star.measurement ?: return 0.0
++        return minOf(30.0, measurement.snr) / maxOf(1.0, measurement.hfd * measurement.hfd)
++      }
++      val weightSum = usedStars.sumOf(::weight)
++      val aggregateDx = if (weightSum > 0.0) {
++        usedStars.sumOf { (it.foundX - it.referenceX) * weight(it) } / weightSum
++      } else medianDx
++      val aggregateDy = if (weightSum > 0.0) {
++        usedStars.sumOf { (it.foundY - it.referenceY) * weight(it) } / weightSum
++      } else medianDy
++
++      val anchor = targets.first()
++      val scale = maxOf(anchor.viewWidth / width, anchor.viewHeight / height)
++      val cropX = (width * scale - anchor.viewWidth) / 2.0
++      val cropY = (height * scale - anchor.viewHeight) / 2.0
++      val anchorReferenceX = ((anchor.referenceX * anchor.viewWidth + cropX) / scale)
++      val anchorReferenceY = ((anchor.referenceY * anchor.viewHeight + cropY) / scale)
++      val aggregateViewX = if (usedStars.isNotEmpty()) {
++        (((anchorReferenceX + aggregateDx) * scale - cropX) / anchor.viewWidth).coerceIn(0.0, 1.0)
++      } else anchor.currentX
++      val aggregateViewY = if (usedStars.isNotEmpty()) {
++        (((anchorReferenceY + aggregateDy) * scale - cropY) / anchor.viewHeight).coerceIn(0.0, 1.0)
++      } else anchor.currentY
++      val representative = usedStars.maxByOrNull { weight(it) }?.measurement
++      val usedIds = usedStars.map { it.target.id }.toSet()
++      val starsPayload = tracked.map { star ->
++        mapOf(
++          "id" to star.target.id,
++          "locked" to star.locked,
++          "used" to usedIds.contains(star.target.id),
++          "x" to star.viewX,
++          "y" to star.viewY,
++          "dxPixels" to (star.foundX - star.referenceX),
++          "dyPixels" to (star.foundY - star.referenceY),
++          "snr" to (star.measurement?.snr ?: 0.0),
++          "hfd" to (star.measurement?.hfd ?: 0.0),
++          "mass" to (star.measurement?.mass ?: 0.0),
++        )
 +      }
 +      sendEvent(
 +        "onStarTracked",
 +        mapOf(
-+          "locked" to locked,
-+          "x" to viewX,
-+          "y" to viewY,
-+          "dxPixels" to (foundX - imageReferenceX),
-+          "dyPixels" to (foundY - imageReferenceY),
-+          "contrast" to measurement.contrast,
-+          "noise" to measurement.noise,
-+          "background" to measurement.background,
-+          "mass" to measurement.mass,
-+          "snr" to measurement.snr,
-+          "hfd" to measurement.hfd,
-+          "saturated" to measurement.saturated,
-+          "apertureRadius" to measurement.apertureRadius,
++          "locked" to usedStars.isNotEmpty(),
++          "x" to aggregateViewX,
++          "y" to aggregateViewY,
++          "dxPixels" to aggregateDx,
++          "dyPixels" to aggregateDy,
++          "contrast" to (representative?.contrast ?: 0.0),
++          "noise" to (representative?.noise ?: 0.0),
++          "background" to (representative?.background ?: 0.0),
++          "mass" to (representative?.mass ?: 0.0),
++          "snr" to (representative?.snr ?: 0.0),
++          "hfd" to (representative?.hfd ?: 0.0),
++          "saturated" to (representative?.saturated ?: false),
++          "apertureRadius" to (representative?.apertureRadius ?: 0),
++          "starCount" to tracked.size,
++          "lockedStarCount" to lockedStars.size,
++          "inlierStarCount" to usedStars.size,
++          "stars" to starsPayload,
 +          "frameWidth" to width,
 +          "frameHeight" to height,
 +          "timestamp" to System.currentTimeMillis().toDouble(),
@@ -599,6 +710,7 @@ index 015b9a8..b5e9b53 100644
 +    private const val TRACKING_INTERVAL_MS = 200L
 +    private const val MAX_AUTO_CANDIDATES = 80
 +    private const val MAX_AUTO_STARS_TO_MEASURE = 24
++    private const val MAX_TRACKING_STARS = 12
 +  }
  }
  
@@ -821,10 +933,10 @@ index e97326d..81a7d82 100644
        requestMethod = "GET"
        connectTimeout = 3_000
 diff --git a/node_modules/expo-sony-camera/build/SonyCamera.types.d.ts b/node_modules/expo-sony-camera/build/SonyCamera.types.d.ts
-index 1858ee5..fe9f33c 100644
+index 1858ee5..3fddf49 100644
 --- a/node_modules/expo-sony-camera/build/SonyCamera.types.d.ts
 +++ b/node_modules/expo-sony-camera/build/SonyCamera.types.d.ts
-@@ -113,10 +113,44 @@ export type SonyFocusResult = {
+@@ -113,10 +113,71 @@ export type SonyFocusResult = {
      status: 'focused' | 'started' | 'failed' | 'unsupported';
      reason?: string;
  };
@@ -849,12 +961,39 @@ index 1858ee5..fe9f33c 100644
 +    frameWidth: number;
 +    frameHeight: number;
 +    timestamp: number;
++    /** Number of stars selected, currently locked, and retained by vector consensus. */
++    starCount: number;
++    lockedStarCount: number;
++    inlierStarCount: number;
++    stars: SonyTrackedStarSample[];
++};
++export type SonyTrackedStarSample = {
++    id: number;
++    locked: boolean;
++    used: boolean;
++    x: number;
++    y: number;
++    dxPixels: number;
++    dyPixels: number;
++    snr: number;
++    hfd: number;
++    mass: number;
++};
++export type SonyAutoSelectedStar = {
++    id: number;
++    x: number;
++    y: number;
++    snr: number;
++    hfd: number;
++    mass: number;
 +};
 +export type SonyAutoStarSelectionResult = {
 +    found: boolean;
 +    x: number;
 +    y: number;
 +    candidateCount: number;
++    selectedCount: number;
++    stars: SonyAutoSelectedStar[];
 +    reason?: string;
 +    snr: number;
 +    hfd: number;
@@ -886,10 +1025,10 @@ index 6e395a0..839982f 100644
      clearDiagnostics(): void;
  }
 diff --git a/node_modules/expo-sony-camera/src/SonyCamera.types.ts b/node_modules/expo-sony-camera/src/SonyCamera.types.ts
-index b125ec2..8560c04 100644
+index b125ec2..544f1e2 100644
 --- a/node_modules/expo-sony-camera/src/SonyCamera.types.ts
 +++ b/node_modules/expo-sony-camera/src/SonyCamera.types.ts
-@@ -152,11 +152,48 @@ export type SonyFocusResult = {
+@@ -152,11 +152,77 @@ export type SonyFocusResult = {
    status: 'focused' | 'started' | 'failed' | 'unsupported';
    reason?: string;
  };
@@ -916,6 +1055,33 @@ index b125ec2..8560c04 100644
 +  frameWidth: number;
 +  frameHeight: number;
 +  timestamp: number;
++  /** Number of stars selected, currently locked, and retained by vector consensus. */
++  starCount: number;
++  lockedStarCount: number;
++  inlierStarCount: number;
++  stars: SonyTrackedStarSample[];
++};
++
++export type SonyTrackedStarSample = {
++  id: number;
++  locked: boolean;
++  used: boolean;
++  x: number;
++  y: number;
++  dxPixels: number;
++  dyPixels: number;
++  snr: number;
++  hfd: number;
++  mass: number;
++};
++
++export type SonyAutoSelectedStar = {
++  id: number;
++  x: number;
++  y: number;
++  snr: number;
++  hfd: number;
++  mass: number;
 +};
 +
 +export type SonyAutoStarSelectionResult = {
@@ -923,6 +1089,8 @@ index b125ec2..8560c04 100644
 +  x: number;
 +  y: number;
 +  candidateCount: number;
++  selectedCount: number;
++  stars: SonyAutoSelectedStar[];
 +  reason?: string;
 +  snr: number;
 +  hfd: number;
