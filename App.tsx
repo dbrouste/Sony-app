@@ -23,14 +23,27 @@ type DiagnosticRoute = {
 type Point = { x: number; y: number };
 type TimedPoint = Point & { timestamp: number };
 type PreviewSize = { width: number; height: number };
+type AlignmentPhase = 'idle' | 'reference' | 'ready' | 'measuring';
+type DriftMeasurement = { timestamp: number; distancePixels: number };
 type RobustLineFit = {
   start: Point;
   end: Point;
+  centerPixels: Point;
+  directionPixels: Point;
+  imageSize: PreviewSize;
   inliers: boolean[];
+  inlierCount: number;
+  rmsPixels: number;
+};
+type DriftTrend = {
+  slopePixelsPerMinute: number;
+  currentDistancePixels: number;
+  rmsPixels: number;
   inlierCount: number;
 };
 
 const MAX_PREVIEW_ZOOM = 10;
+const MIN_REFERENCE_POINTS = 12;
 
 function clamp(value: number, minimum: number, maximum: number) {
   return Math.min(maximum, Math.max(minimum, value));
@@ -80,10 +93,11 @@ function predictTimedPoint(samples: TimedPoint[], timestamp: number): Point {
   return { x: clamp(predict('x'), 0, 1), y: clamp(predict('y'), 0, 1) };
 }
 
-function medianTimedPoint(samples: TimedPoint[]): Point {
+function medianTimedPoint(samples: TimedPoint[]): TimedPoint {
   return {
     x: median(samples.map((sample) => sample.x)),
     y: median(samples.map((sample) => sample.y)),
+    timestamp: median(samples.map((sample) => sample.timestamp)),
   };
 }
 
@@ -114,9 +128,101 @@ function totalLeastSquares(points: Point[]) {
 }
 
 function pointLineDistance(point: Point, center: Point, direction: Point) {
-  return Math.abs(
-    (point.x - center.x) * -direction.y + (point.y - center.y) * direction.x
+  return Math.abs(pointLineSignedDistance(point, center, direction));
+}
+
+function pointLineSignedDistance(point: Point, center: Point, direction: Point) {
+  return (point.x - center.x) * -direction.y + (point.y - center.y) * direction.x;
+}
+
+function normalizedPointToPixels(point: Point, size: PreviewSize): Point {
+  return { x: point.x * size.width, y: point.y * size.height };
+}
+
+function signedDistanceToFit(point: Point, line: RobustLineFit) {
+  return pointLineSignedDistance(
+    normalizedPointToPixels(point, line.imageSize),
+    line.centerPixels,
+    line.directionPixels
   );
+}
+
+function projectOntoFit(point: Point, line: RobustLineFit): Point {
+  const pixels = normalizedPointToPixels(point, line.imageSize);
+  const distance = pointLineSignedDistance(pixels, line.centerPixels, line.directionPixels);
+  const normal = { x: -line.directionPixels.y, y: line.directionPixels.x };
+  return {
+    x: (pixels.x - distance * normal.x) / line.imageSize.width,
+    y: (pixels.y - distance * normal.y) / line.imageSize.height,
+  };
+}
+
+function leastSquaresDrift(samples: DriftMeasurement[], accepted: boolean[]) {
+  const selected = samples.filter((_, index) => accepted[index]);
+  if (selected.length < 2) return null;
+  const origin = selected[0].timestamp;
+  const times = selected.map((sample) => (sample.timestamp - origin) / 60000);
+  const meanTime = times.reduce((sum, value) => sum + value, 0) / times.length;
+  const meanDistance =
+    selected.reduce((sum, sample) => sum + sample.distancePixels, 0) / selected.length;
+  const denominator = times.reduce((sum, value) => sum + (value - meanTime) ** 2, 0);
+  if (denominator < 1e-9) return null;
+  const slope = selected.reduce(
+    (sum, sample, index) =>
+      sum + (times[index] - meanTime) * (sample.distancePixels - meanDistance),
+    0
+  ) / denominator;
+  return {
+    origin,
+    slope,
+    intercept: meanDistance - slope * meanTime,
+  };
+}
+
+/** Robust signed drift versus time, expressed in source-JPEG pixels per minute. */
+function fitDriftTrend(samples: DriftMeasurement[]): DriftTrend | null {
+  if (samples.length < 5) return null;
+  let inliers = samples.map(() => true);
+  let line = leastSquaresDrift(samples, inliers);
+  if (!line) return null;
+
+  for (let iteration = 0; iteration < 3; iteration += 1) {
+    const residuals = samples.map((sample) => {
+      const time = (sample.timestamp - line!.origin) / 60000;
+      return sample.distancePixels - (line!.intercept + line!.slope * time);
+    });
+    const residualMedian = median(residuals.filter((_, index) => inliers[index]));
+    const mad = median(
+      residuals
+        .filter((_, index) => inliers[index])
+        .map((residual) => Math.abs(residual - residualMedian))
+    );
+    const threshold = clamp(3 * 1.4826 * mad, 0.25, 5);
+    const nextInliers = residuals.map(
+      (residual) => Math.abs(residual - residualMedian) <= threshold
+    );
+    if (nextInliers.filter(Boolean).length < 4) break;
+    inliers = nextInliers;
+    line = leastSquaresDrift(samples, inliers);
+    if (!line) return null;
+  }
+
+  const acceptedResiduals = samples
+    .map((sample) => {
+      const time = (sample.timestamp - line!.origin) / 60000;
+      return sample.distancePixels - (line!.intercept + line!.slope * time);
+    })
+    .filter((_, index) => inliers[index]);
+  const latestTime = (samples[samples.length - 1].timestamp - line.origin) / 60000;
+  return {
+    slopePixelsPerMinute: line.slope,
+    currentDistancePixels: line.intercept + line.slope * latestTime,
+    rmsPixels: Math.sqrt(
+      acceptedResiduals.reduce((sum, residual) => sum + residual ** 2, 0) /
+        acceptedResiduals.length
+    ),
+    inlierCount: inliers.filter(Boolean).length,
+  };
 }
 
 /** Robust orthogonal fit: pair consensus followed by iterative MAD rejection. */
@@ -190,6 +296,9 @@ function fitRobustLine(points: Point[], size: PreviewSize): RobustLineFit | null
   }
 
   const accepted = pixels.filter((_, index) => inliers[index]);
+  const acceptedDistances = accepted.map((point) =>
+    pointLineDistance(point, line!.center, line!.direction)
+  );
   const projections = accepted.map(
     (point) =>
       (point.x - line!.center.x) * line!.direction.x +
@@ -208,8 +317,15 @@ function fitRobustLine(points: Point[], size: PreviewSize): RobustLineFit | null
   return {
     start: endpoint(minimum),
     end: endpoint(maximum),
+    centerPixels: line.center,
+    directionPixels: line.direction,
+    imageSize: size,
     inliers,
     inlierCount: inliers.filter(Boolean).length,
+    rmsPixels: Math.sqrt(
+      acceptedDistances.reduce((sum, distance) => sum + distance ** 2, 0) /
+        acceptedDistances.length
+    ),
   };
 }
 
@@ -282,7 +398,10 @@ export default function App() {
   const [selectedStar, setSelectedStar] = useState<Point | null>(null);
   const [trackingSample, setTrackingSample] = useState<SonyStarTrackingSample | null>(null);
   const [filteredTrackingPoint, setFilteredTrackingPoint] = useState<Point | null>(null);
-  const [trackingTrail, setTrackingTrail] = useState<Point[]>([]);
+  const [trackingTrail, setTrackingTrail] = useState<TimedPoint[]>([]);
+  const [alignmentPhase, setAlignmentPhase] = useState<AlignmentPhase>('idle');
+  const [referenceLine, setReferenceLine] = useState<RobustLineFit | null>(null);
+  const [driftMeasurements, setDriftMeasurements] = useState<DriftMeasurement[]>([]);
   const [autoSelecting, setAutoSelecting] = useState(false);
   const previewSizeRef = useRef(previewSize);
   const previewZoomRef = useRef(previewZoom);
@@ -291,6 +410,8 @@ export default function App() {
   const temporalBinRef = useRef<TimedPoint[]>([]);
   const temporalBinStartedAtRef = useRef<number | null>(null);
   const lastLockedAtRef = useRef<number | null>(null);
+  const alignmentPhaseRef = useRef<AlignmentPhase>('idle');
+  const referenceLineRef = useRef<RobustLineFit | null>(null);
   const gestureRef = useRef({
     startedAt: 0,
     initialTouchCount: 0,
@@ -330,6 +451,19 @@ export default function App() {
     if (clearTrail) setTrackingTrail([]);
   }
 
+  function updateAlignmentPhase(next: AlignmentPhase) {
+    alignmentPhaseRef.current = next;
+    setAlignmentPhase(next);
+  }
+
+  function clearAlignment(clearTrail = true) {
+    updateAlignmentPhase('idle');
+    referenceLineRef.current = null;
+    setReferenceLine(null);
+    setDriftMeasurements([]);
+    if (clearTrail) setTrackingTrail([]);
+  }
+
   function resetPreviewNavigation() {
     previewZoomRef.current = 1;
     previewPanRef.current = { x: 0, y: 0 };
@@ -339,6 +473,7 @@ export default function App() {
     setTrackingSample(null);
     setAutoSelecting(false);
     clearTemporalTracking(true);
+    clearAlignment(false);
     camera?.clearStarTracking?.();
   }
 
@@ -357,6 +492,7 @@ export default function App() {
     setTrackingSample(null);
     setAutoSelecting(false);
     clearTemporalTracking(true);
+    clearAlignment(false);
     camera?.setStarTrackingPoint?.(point.x, point.y, size.width, size.height);
   }
 
@@ -373,9 +509,46 @@ export default function App() {
     setSelectedStar(null);
     setTrackingSample(null);
     clearTemporalTracking(true);
+    clearAlignment(false);
     setLastError(null);
     setAutoSelecting(true);
     camera.autoSelectStar(size.width, size.height);
+  }
+
+  function beginReferenceAcquisition() {
+    if (!selectedStar || !trackingSample?.locked) {
+      setLastError('Sélectionne et verrouille une étoile avant de lancer la référence.');
+      return;
+    }
+    clearTemporalTracking(true);
+    referenceLineRef.current = null;
+    setReferenceLine(null);
+    setDriftMeasurements([]);
+    setLastError(null);
+    updateAlignmentPhase('reference');
+  }
+
+  function freezeReference(line: RobustLineFit | null) {
+    if (!line || trackingTrail.length < MIN_REFERENCE_POINTS) {
+      setLastError(`Laisse la monture arrêtée au moins ${MIN_REFERENCE_POINTS} secondes.`);
+      return;
+    }
+    referenceLineRef.current = line;
+    setReferenceLine(line);
+    temporalBinRef.current = [];
+    temporalBinStartedAtRef.current = null;
+    setDriftMeasurements([]);
+    setLastError(null);
+    updateAlignmentPhase('ready');
+  }
+
+  function beginDriftMeasurement() {
+    if (!referenceLineRef.current) return;
+    temporalBinRef.current = [];
+    temporalBinStartedAtRef.current = null;
+    setDriftMeasurements([]);
+    setLastError(null);
+    updateAlignmentPhase('measuring');
   }
 
   const previewResponder = useMemo(
@@ -484,15 +657,25 @@ export default function App() {
       );
   }, [previewPan, previewSize, previewZoom, trackingTrail]);
 
-  const robustDriftLine = useMemo(
-    () => fitRobustLine(trackingTrail, previewSize),
-    [previewSize, trackingTrail]
+  const analysisSize = useMemo<PreviewSize>(
+    () =>
+      trackingSample
+        ? { width: trackingSample.frameWidth, height: trackingSample.frameHeight }
+        : previewSize,
+    [previewSize, trackingSample]
   );
 
+  const robustDriftLine = useMemo(
+    () => fitRobustLine(trackingTrail, analysisSize),
+    [analysisSize, trackingTrail]
+  );
+
+  const displayedDriftLine = referenceLine ?? robustDriftLine;
+
   const driftLineOnScreen = useMemo(() => {
-    if (!robustDriftLine) return null;
-    const start = pointToScreen(robustDriftLine.start);
-    const end = pointToScreen(robustDriftLine.end);
+    if (!displayedDriftLine) return null;
+    const start = pointToScreen(displayedDriftLine.start);
+    const end = pointToScreen(displayedDriftLine.end);
     const length = Math.hypot(end.x - start.x, end.y - start.y);
     return {
       left: (start.x + end.x) / 2 - length / 2,
@@ -500,7 +683,36 @@ export default function App() {
       width: length,
       angle: Math.atan2(end.y - start.y, end.x - start.x),
     };
-  }, [previewPan, previewSize, previewZoom, robustDriftLine]);
+  }, [displayedDriftLine, previewPan, previewSize, previewZoom]);
+
+  const driftTrend = useMemo(
+    () => fitDriftTrend(driftMeasurements),
+    [driftMeasurements]
+  );
+
+  const driftOffsetOnScreen = useMemo(() => {
+    if (alignmentPhase !== 'measuring' || !referenceLine || !filteredTrackingPoint) return null;
+    const star = pointToScreen(filteredTrackingPoint);
+    const projection = pointToScreen(projectOntoFit(filteredTrackingPoint, referenceLine));
+    const length = Math.hypot(star.x - projection.x, star.y - projection.y);
+    return {
+      left: (star.x + projection.x) / 2 - length / 2,
+      top: (star.y + projection.y) / 2 - 1,
+      width: length,
+      angle: Math.atan2(star.y - projection.y, star.x - projection.x),
+    };
+  }, [alignmentPhase, filteredTrackingPoint, previewPan, previewSize, previewZoom, referenceLine]);
+
+  const referenceDurationSeconds =
+    trackingTrail.length >= 2
+      ? (trackingTrail[trackingTrail.length - 1].timestamp - trackingTrail[0].timestamp) / 1000
+      : 0;
+  const measurementDurationSeconds =
+    driftMeasurements.length >= 2
+      ? (driftMeasurements[driftMeasurements.length - 1].timestamp -
+          driftMeasurements[0].timestamp) /
+        1000
+      : 0;
 
   const statusColor = useMemo(() => {
     if (stateName === 'streaming') return '#54e397';
@@ -555,7 +767,19 @@ export default function App() {
         if (sample.timestamp - temporalBinStartedAtRef.current >= 1000) {
           const completedBin = temporalBinRef.current;
           if (completedBin.length >= 3) {
-            setTrackingTrail((trail) => [...trail, medianTimedPoint(completedBin)].slice(-120));
+            const consolidated = medianTimedPoint(completedBin);
+            if (alignmentPhaseRef.current === 'reference') {
+              setTrackingTrail((trail) => [...trail, consolidated].slice(-120));
+            } else if (
+              alignmentPhaseRef.current === 'measuring' &&
+              referenceLineRef.current
+            ) {
+              const measurement = {
+                timestamp: consolidated.timestamp,
+                distancePixels: signedDistanceToFit(consolidated, referenceLineRef.current),
+              };
+              setDriftMeasurements((samples) => [...samples, measurement].slice(-300));
+            }
           }
           temporalBinRef.current = [];
           temporalBinStartedAtRef.current = null;
@@ -727,11 +951,27 @@ export default function App() {
                 pointerEvents="none"
                 style={[
                   styles.driftLine,
+                  referenceLine ? styles.frozenDriftLine : null,
                   {
                     left: driftLineOnScreen.left,
                     top: driftLineOnScreen.top,
                     width: driftLineOnScreen.width,
                     transform: [{ rotate: `${driftLineOnScreen.angle}rad` }],
+                  },
+                ]}
+              />
+            ) : null}
+
+            {driftOffsetOnScreen && driftOffsetOnScreen.width > 0.5 ? (
+              <View
+                pointerEvents="none"
+                style={[
+                  styles.driftOffsetLine,
+                  {
+                    left: driftOffsetOnScreen.left,
+                    top: driftOffsetOnScreen.top,
+                    width: driftOffsetOnScreen.width,
+                    transform: [{ rotate: `${driftOffsetOnScreen.angle}rad` }],
                   },
                 ]}
               />
@@ -861,11 +1101,6 @@ export default function App() {
               ) : selectedStar ? (
                 <Text style={styles.trackingStatus}>Recherche de l’étoile…</Text>
               ) : null}
-              {robustDriftLine ? (
-                <Text style={styles.lineFitStatus}>
-                  Droite robuste · {robustDriftLine.inlierCount}/{trackingTrail.length} points retenus
-                </Text>
-              ) : null}
               <Text style={styles.lineFitStatus}>
                 Filtre temporel 1 s · trace consolidée à 1 point/s
               </Text>
@@ -879,6 +1114,105 @@ export default function App() {
                 onPress={resetPreviewNavigation}
                 disabled={autoSelecting || (previewZoom === 1 && selectedStar === null)}
               />
+
+              <View style={styles.alignmentPanel}>
+                <Text style={styles.selectionTitle}>Alignement par dérive</Text>
+
+                {alignmentPhase === 'idle' ? (
+                  <>
+                    <Text style={styles.alignmentInstruction}>
+                      Arrête l’AstroTrac, puis lance l’acquisition de la trace de référence.
+                    </Text>
+                    <ActionButton
+                      title="1. Acquérir la référence"
+                      onPress={beginReferenceAcquisition}
+                      disabled={!trackingSample?.locked || autoSelecting}
+                    />
+                  </>
+                ) : null}
+
+                {alignmentPhase === 'reference' ? (
+                  <>
+                    <Text style={styles.referenceStatus}>
+                      MONTURE ARRÊTÉE · référence {referenceDurationSeconds.toFixed(0)} s ·{' '}
+                      {trackingTrail.length} points
+                    </Text>
+                    {robustDriftLine ? (
+                      <Text style={styles.lineFitStatus}>
+                        Droite mobile · {robustDriftLine.inlierCount}/{trackingTrail.length} points · RMS{' '}
+                        {robustDriftLine.rmsPixels.toFixed(2)} px
+                      </Text>
+                    ) : (
+                      <Text style={styles.alignmentInstruction}>
+                        Acquisition en cours… vise au moins {MIN_REFERENCE_POINTS} secondes.
+                      </Text>
+                    )}
+                    <ActionButton
+                      title="Figer la référence"
+                      onPress={() => freezeReference(robustDriftLine)}
+                      disabled={!robustDriftLine || trackingTrail.length < MIN_REFERENCE_POINTS}
+                    />
+                    <ActionButton
+                      title="Annuler la référence"
+                      onPress={() => {
+                        clearTemporalTracking(true);
+                        clearAlignment(false);
+                      }}
+                    />
+                  </>
+                ) : null}
+
+                {alignmentPhase === 'ready' && referenceLine ? (
+                  <>
+                    <Text style={styles.referenceStatus}>
+                      RÉFÉRENCE FIGÉE · {referenceLine.inlierCount}/{trackingTrail.length} points · RMS{' '}
+                      {referenceLine.rmsPixels.toFixed(2)} px
+                    </Text>
+                    <Text style={styles.alignmentInstruction}>
+                      Démarre maintenant le suivi sidéral de l’AstroTrac, puis lance la mesure.
+                    </Text>
+                    <ActionButton title="2. Démarrer la mesure" onPress={beginDriftMeasurement} />
+                    <ActionButton
+                      title="Recommencer la référence"
+                      onPress={beginReferenceAcquisition}
+                    />
+                  </>
+                ) : null}
+
+                {alignmentPhase === 'measuring' && referenceLine ? (
+                  <>
+                    <Text style={styles.measurementStatus}>
+                      SUIVI SIDÉRAL · mesure {measurementDurationSeconds.toFixed(0)} s ·{' '}
+                      {driftMeasurements.length} points
+                    </Text>
+                    {driftTrend ? (
+                      <Text style={styles.driftResult}>
+                        Dérive {driftTrend.slopePixelsPerMinute >= 0 ? '+' : ''}
+                        {driftTrend.slopePixelsPerMinute.toFixed(2)} px/min
+                        {'\n'}Écart signé {driftTrend.currentDistancePixels >= 0 ? '+' : ''}
+                        {driftTrend.currentDistancePixels.toFixed(2)} px · RMS{' '}
+                        {driftTrend.rmsPixels.toFixed(2)} px
+                        {'\n'}Tendance robuste · {driftTrend.inlierCount}/{driftMeasurements.length} points
+                      </Text>
+                    ) : (
+                      <Text style={styles.alignmentInstruction}>
+                        Stabilisation de la mesure… encore{' '}
+                        {Math.max(0, 5 - driftMeasurements.length)} s environ.
+                      </Text>
+                    )}
+                    <Text style={styles.alignmentInstruction}>
+                      Le segment orange montre l’écart perpendiculaire à la référence figée.
+                    </Text>
+                    <ActionButton
+                      title="Terminer et recommencer"
+                      onPress={() => {
+                        clearTemporalTracking(true);
+                        clearAlignment(false);
+                      }}
+                    />
+                  </>
+                ) : null}
+              </View>
             </View>
           ) : null}
 
@@ -1140,6 +1474,18 @@ const styles = StyleSheet.create({
     backgroundColor: '#5ee7ff',
     opacity: 0.9,
   },
+  frozenDriftLine: {
+    height: 3,
+    backgroundColor: '#5ee7ff',
+    opacity: 1,
+  },
+  driftOffsetLine: {
+    position: 'absolute',
+    height: 2,
+    borderRadius: 1,
+    backgroundColor: '#f4a64d',
+    opacity: 1,
+  },
   controlColumn: {
     flex: 1,
     maxWidth: 560,
@@ -1227,6 +1573,40 @@ const styles = StyleSheet.create({
     color: '#5ee7ff',
     fontFamily: 'monospace',
     fontSize: 10,
+  },
+  alignmentPanel: {
+    gap: 9,
+    marginTop: 3,
+    paddingTop: 11,
+    borderTopWidth: 1,
+    borderTopColor: '#2f4e78',
+  },
+  alignmentInstruction: {
+    color: '#b9c8dc',
+    fontSize: 11,
+    lineHeight: 16,
+  },
+  referenceStatus: {
+    color: '#5ee7ff',
+    fontFamily: 'monospace',
+    fontSize: 11,
+    lineHeight: 16,
+  },
+  measurementStatus: {
+    color: '#f4c95d',
+    fontFamily: 'monospace',
+    fontSize: 11,
+    lineHeight: 16,
+  },
+  driftResult: {
+    padding: 10,
+    borderRadius: 8,
+    color: '#f4c95d',
+    backgroundColor: '#252014',
+    fontFamily: 'monospace',
+    fontSize: 12,
+    fontWeight: '700',
+    lineHeight: 18,
   },
   error: {
     padding: 10,
