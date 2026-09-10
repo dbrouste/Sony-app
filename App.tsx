@@ -44,9 +44,12 @@ type DriftTrend = {
   rmsPixels: number;
   inlierCount: number;
 };
+type FocusQuality = 'waiting' | 'green' | 'orange' | 'red';
 
 const MAX_PREVIEW_ZOOM = 10;
 const MIN_REFERENCE_POINTS = 12;
+const FOCUS_MEDIAN_WINDOW = 7;
+const FOCUS_MIN_SAMPLES = 5;
 const APP_COMMIT = process.env.EXPO_PUBLIC_GIT_COMMIT_SHA ?? 'non renseigné';
 
 function clamp(value: number, minimum: number, maximum: number) {
@@ -417,6 +420,12 @@ export default function App() {
   const [referenceLine, setReferenceLine] = useState<RobustLineFit | null>(null);
   const [driftMeasurements, setDriftMeasurements] = useState<DriftMeasurement[]>([]);
   const [autoSelecting, setAutoSelecting] = useState(false);
+  const [focusMode, setFocusMode] = useState(false);
+  const [focusCurrentHfr, setFocusCurrentHfr] = useState<number | null>(null);
+  const [focusBestHfr, setFocusBestHfr] = useState<number | null>(null);
+  const [focusQuality, setFocusQuality] = useState<FocusQuality>('waiting');
+  const [focusWindowCount, setFocusWindowCount] = useState(0);
+  const [focusWarning, setFocusWarning] = useState<string | null>(null);
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [updateMessage, setUpdateMessage] = useState<string | null>(null);
   const previewSizeRef = useRef(previewSize);
@@ -428,6 +437,9 @@ export default function App() {
   const lastLockedAtRef = useRef<number | null>(null);
   const alignmentPhaseRef = useRef<AlignmentPhase>('idle');
   const referenceLineRef = useRef<RobustLineFit | null>(null);
+  const focusModeRef = useRef(false);
+  const focusHfrSamplesRef = useRef<number[]>([]);
+  const focusBestHfrRef = useRef<number | null>(null);
   const gestureRef = useRef({
     startedAt: 0,
     initialTouchCount: 0,
@@ -480,6 +492,64 @@ export default function App() {
     if (clearTrail) setTrackingTrail([]);
   }
 
+  function resetFocusMeasurements() {
+    focusHfrSamplesRef.current = [];
+    focusBestHfrRef.current = null;
+    setFocusCurrentHfr(null);
+    setFocusBestHfr(null);
+    setFocusQuality('waiting');
+    setFocusWindowCount(0);
+    setFocusWarning(null);
+  }
+
+  function updateFocusMeasurement(sample: SonyStarTrackingSample) {
+    const stars = sample.stars ?? [];
+    const saturatedCount = stars.filter((star) => star.saturated).length;
+    const weakCount = stars.filter((star) => !star.locked && !star.saturated).length;
+    const usableHfr = stars
+      .filter((star) => star.locked && star.used && !star.saturated && Number.isFinite(star.hfd) && star.hfd > 0)
+      .map((star) => star.hfd / 2);
+
+    if (saturatedCount > 0) {
+      setFocusWarning(`${saturatedCount} étoile${saturatedCount > 1 ? 's' : ''} saturée${saturatedCount > 1 ? 's' : ''}`);
+    } else if (usableHfr.length === 0) {
+      setFocusWarning('Étoiles trop faibles ou perdues');
+    } else if (weakCount > 0) {
+      setFocusWarning(`${weakCount} étoile${weakCount > 1 ? 's' : ''} trop faible${weakCount > 1 ? 's' : ''} ou perdue${weakCount > 1 ? 's' : ''}`);
+    } else {
+      setFocusWarning(null);
+    }
+
+    if (usableHfr.length === 0) return;
+    const frameHfr = median(usableHfr);
+    focusHfrSamplesRef.current = [...focusHfrSamplesRef.current, frameHfr].slice(-FOCUS_MEDIAN_WINDOW);
+    setFocusWindowCount(focusHfrSamplesRef.current.length);
+    if (focusHfrSamplesRef.current.length < FOCUS_MIN_SAMPLES) return;
+
+    const currentHfr = median(focusHfrSamplesRef.current);
+    const previousBest = focusBestHfrRef.current;
+    const bestHfr = previousBest === null || currentHfr < previousBest ? currentHfr : previousBest;
+    focusBestHfrRef.current = bestHfr;
+    setFocusCurrentHfr(currentHfr);
+    setFocusBestHfr(bestHfr);
+    const degradation = bestHfr > 0 ? (currentHfr - bestHfr) / bestHfr : 0;
+    setFocusQuality(degradation < 0.05 ? 'green' : degradation <= 0.15 ? 'orange' : 'red');
+  }
+
+  function startFocusMode() {
+    focusModeRef.current = true;
+    setFocusMode(true);
+    resetFocusMeasurements();
+    clearAlignment(false);
+    autoSelectStar();
+  }
+
+  function stopFocusMode() {
+    focusModeRef.current = false;
+    setFocusMode(false);
+    resetFocusMeasurements();
+  }
+
   function resetPreviewNavigation() {
     previewZoomRef.current = 1;
     previewPanRef.current = { x: 0, y: 0 };
@@ -488,6 +558,9 @@ export default function App() {
     setSelectedStar(null);
     setTrackingSample(null);
     setAutoSelecting(false);
+    focusModeRef.current = false;
+    setFocusMode(false);
+    resetFocusMeasurements();
     clearTemporalTracking(true);
     clearAlignment(false);
     camera?.clearStarTracking?.();
@@ -766,6 +839,7 @@ export default function App() {
     });
     const trackingSubscription = camera.addListener('onStarTracked', (sample) => {
       setTrackingSample(sample);
+      if (focusModeRef.current) updateFocusMeasurement(sample);
       if (sample.locked) {
         const point = { x: sample.x, y: sample.y, timestamp: sample.timestamp };
         const previousLockedAt = lastLockedAtRef.current;
@@ -1210,7 +1284,43 @@ export default function App() {
                 disabled={autoSelecting || (previewZoom === 1 && selectedStar === null)}
               />
 
-              <View style={styles.alignmentPanel}>
+              {!focusMode ? (
+                <ActionButton
+                  title="Démarrer le mode Focus"
+                  onPress={startFocusMode}
+                  disabled={autoSelecting}
+                />
+              ) : (
+                <View style={styles.focusPanel}>
+                  <Text style={styles.selectionTitle}>Mode Focus · médiane de 12 étoiles max.</Text>
+                  <View
+                    style={[
+                      styles.focusIndicator,
+                      focusQuality === 'green'
+                        ? styles.focusIndicatorGreen
+                        : focusQuality === 'orange'
+                          ? styles.focusIndicatorOrange
+                          : focusQuality === 'red'
+                            ? styles.focusIndicatorRed
+                            : styles.focusIndicatorWaiting,
+                    ]}>
+                    <Text style={styles.focusValue}>
+                      HFR actuel {focusCurrentHfr === null ? '—' : `${focusCurrentHfr.toFixed(2)} px`}
+                    </Text>
+                    <Text style={styles.focusBestValue}>
+                      Meilleur HFR {focusBestHfr === null ? '—' : `${focusBestHfr.toFixed(2)} px`}
+                    </Text>
+                  </View>
+                  <Text style={styles.focusDetails}>
+                    Médiane glissante {focusWindowCount}/{FOCUS_MEDIAN_WINDOW} images · seuils vert &lt; 5 %, orange 5–15 %, rouge &gt; 15 %
+                  </Text>
+                  {focusWarning ? <Text style={styles.focusWarning}>ALERTE · {focusWarning}</Text> : null}
+                  <ActionButton title="Réinitialiser le meilleur HFR" onPress={resetFocusMeasurements} />
+                  <ActionButton title="Quitter le mode Focus" onPress={stopFocusMode} danger />
+                </View>
+              )}
+
+              {!focusMode ? <View style={styles.alignmentPanel}>
                 <Text style={styles.selectionTitle}>Alignement par dérive</Text>
 
                 {alignmentPhase === 'idle' ? (
@@ -1311,7 +1421,7 @@ export default function App() {
                     />
                   </>
                 ) : null}
-              </View>
+              </View> : null}
             </View>
           ) : null}
 
@@ -1708,6 +1818,64 @@ const styles = StyleSheet.create({
     color: '#5ee7ff',
     fontFamily: 'monospace',
     fontSize: 10,
+  },
+  focusPanel: {
+    gap: 9,
+    marginTop: 3,
+    padding: 11,
+    borderRadius: 9,
+    borderWidth: 1,
+    borderColor: '#4a5f78',
+    backgroundColor: '#111722',
+  },
+  focusIndicator: {
+    padding: 14,
+    borderRadius: 9,
+    borderWidth: 2,
+  },
+  focusIndicatorWaiting: {
+    borderColor: '#4a5f78',
+    backgroundColor: '#182231',
+  },
+  focusIndicatorGreen: {
+    borderColor: '#54e397',
+    backgroundColor: '#15372b',
+  },
+  focusIndicatorOrange: {
+    borderColor: '#f4a64d',
+    backgroundColor: '#3d2b17',
+  },
+  focusIndicatorRed: {
+    borderColor: '#ff6b6b',
+    backgroundColor: '#421f26',
+  },
+  focusValue: {
+    color: '#f3f6fa',
+    fontFamily: 'monospace',
+    fontSize: 20,
+    fontWeight: '900',
+  },
+  focusBestValue: {
+    marginTop: 4,
+    color: '#d8e1ec',
+    fontFamily: 'monospace',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  focusDetails: {
+    color: '#9fb6d2',
+    fontFamily: 'monospace',
+    fontSize: 10,
+    lineHeight: 15,
+  },
+  focusWarning: {
+    padding: 9,
+    borderRadius: 7,
+    color: '#ffd8d8',
+    backgroundColor: '#531f27',
+    fontFamily: 'monospace',
+    fontSize: 11,
+    fontWeight: '800',
   },
   alignmentPanel: {
     gap: 9,

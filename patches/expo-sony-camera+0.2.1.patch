@@ -12,7 +12,7 @@ index 18b5959..2680983 100644
              }
              lastFrameJpeg = jpeg
 diff --git a/node_modules/expo-sony-camera/android/src/main/java/expo/modules/sonycamera/SonyCameraModule.kt b/node_modules/expo-sony-camera/android/src/main/java/expo/modules/sonycamera/SonyCameraModule.kt
-index 015b9a8..c16ea7f 100644
+index 015b9a8..8c955a8 100644
 --- a/node_modules/expo-sony-camera/android/src/main/java/expo/modules/sonycamera/SonyCameraModule.kt
 +++ b/node_modules/expo-sony-camera/android/src/main/java/expo/modules/sonycamera/SonyCameraModule.kt
 @@ -1,16 +1,91 @@
@@ -161,7 +161,7 @@ index 015b9a8..c16ea7f 100644
  
      View(SonyCameraView::class) {
        Prop("active") { view: SonyCameraView, active: Boolean -> view.setActive(active) }
-@@ -67,7 +181,554 @@ class SonyCameraModule : Module(), SonyCameraController.Listener {
+@@ -67,7 +181,555 @@ class SonyCameraModule : Module(), SonyCameraController.Listener {
      sendEvent("onPhotoCaptured", payload)
    }
  
@@ -675,6 +675,7 @@ index 015b9a8..c16ea7f 100644
 +          "snr" to (star.measurement?.snr ?: 0.0),
 +          "hfd" to (star.measurement?.hfd ?: 0.0),
 +          "mass" to (star.measurement?.mass ?: 0.0),
++          "saturated" to (star.measurement?.saturated ?: false),
 +        )
 +      }
 +      sendEvent(
@@ -935,10 +936,10 @@ index e97326d..81a7d82 100644
        requestMethod = "GET"
        connectTimeout = 3_000
 diff --git a/node_modules/expo-sony-camera/build/SonyCamera.types.d.ts b/node_modules/expo-sony-camera/build/SonyCamera.types.d.ts
-index 1858ee5..04dd7ac 100644
+index 1858ee5..f3e96f5 100644
 --- a/node_modules/expo-sony-camera/build/SonyCamera.types.d.ts
 +++ b/node_modules/expo-sony-camera/build/SonyCamera.types.d.ts
-@@ -113,10 +113,73 @@ export type SonyFocusResult = {
+@@ -113,10 +113,74 @@ export type SonyFocusResult = {
      status: 'focused' | 'started' | 'failed' | 'unsupported';
      reason?: string;
  };
@@ -982,6 +983,7 @@ index 1858ee5..04dd7ac 100644
 +    snr: number;
 +    hfd: number;
 +    mass: number;
++    saturated: boolean;
 +};
 +export type SonyAutoSelectedStar = {
 +    id: number;
@@ -1013,7 +1015,7 @@ index 1858ee5..04dd7ac 100644
  export type SonyCameraViewProps = {
      active?: boolean;
 diff --git a/node_modules/expo-sony-camera/build/SonyCameraModule.d.ts b/node_modules/expo-sony-camera/build/SonyCameraModule.d.ts
-index 6e395a0..839982f 100644
+index 6e395a0..be7ab27 100644
 --- a/node_modules/expo-sony-camera/build/SonyCameraModule.d.ts
 +++ b/node_modules/expo-sony-camera/build/SonyCameraModule.d.ts
 @@ -16,6 +16,11 @@ declare class SonyCameraNativeModule extends NativeModule<SonyCameraModuleEvents
@@ -1029,10 +1031,10 @@ index 6e395a0..839982f 100644
      clearDiagnostics(): void;
  }
 diff --git a/node_modules/expo-sony-camera/src/SonyCamera.types.ts b/node_modules/expo-sony-camera/src/SonyCamera.types.ts
-index b125ec2..ac4d351 100644
+index b125ec2..3c9a599 100644
 --- a/node_modules/expo-sony-camera/src/SonyCamera.types.ts
 +++ b/node_modules/expo-sony-camera/src/SonyCamera.types.ts
-@@ -152,11 +152,79 @@ export type SonyFocusResult = {
+@@ -152,11 +152,80 @@ export type SonyFocusResult = {
    status: 'focused' | 'started' | 'failed' | 'unsupported';
    reason?: string;
  };
@@ -1079,6 +1081,7 @@ index b125ec2..ac4d351 100644
 +  snr: number;
 +  hfd: number;
 +  mass: number;
++  saturated: boolean;
 +};
 +
 +export type SonyAutoSelectedStar = {

@@ -24,6 +24,7 @@ sélectionner automatiquement jusqu’à 12 étoiles et suit leur déplacement c
 | Sélection automatique multi-étoiles | Implémentée, à tester | Choisit de 1 à 12 étoiles isolées, non saturées et éloignées des bords |
 | Suivi multi-étoiles | Implémenté, à tester | Consensus robuste des vecteurs puis moyenne pondérée par SNR et HFD |
 | Suivi du centroïde de l’étoile | Validé sur le ciel | Calcul natif Android à 5 mesures/s, inspiré de PHD2 |
+| Mode Focus multi-étoiles | Implémenté, à tester | HFR médian sur 1 à 12 étoiles et médiane glissante sur 7 images |
 | Filtrage temporel sur 1 seconde | Validé sur le ciel | Régression pour l’affichage et médiane par seconde pour la trace |
 | Qualité Live View maximale | Implémentée, à confirmer | Demande de taille Sony `M` si disponible, sinon repli automatique |
 | Réduction de la latence d’affichage | Implémentée, à tester | Les anciennes images sont abandonnées au lieu d’être mises en file |
@@ -121,6 +122,19 @@ La trace reçoit une position médiane par intervalle indépendant d’une secon
 conserve jusqu’à 120 positions, soit environ deux minutes. Les points acceptés
 par l’ajustement sont affichés en bleu et les points aberrants en orange.
 
+### Mode Focus
+
+Le bouton **Démarrer le mode Focus** relance automatiquement la sélection de 1 à
+12 étoiles. Pour chaque image, l’application calcule la médiane des HFR des
+étoiles verrouillées et retenues par le consensus, puis applique une seconde
+médiane glissante sur 7 images. La valeur n’est affichée qu’après 5 mesures
+valides.
+
+Le meilleur HFR reste mémorisé pendant la session. L’indicateur est vert à moins
+de 5 % du minimum, orange entre 5 et 15 %, et rouge au-delà de 15 %. Une alerte
+signale les étoiles saturées, trop faibles ou perdues. **Réinitialiser le meilleur
+HFR** permet de recommencer une recherche sans quitter le mode.
+
 ### Droite robuste
 
 La direction de la trace est estimée en trois étapes :
@@ -161,11 +175,13 @@ du zoom d’affichage.
 7. Appuyer sur **Démarrer Live View**.
 8. Utiliser **Sélection automatique** ou toucher une étoile après avoir zoomé.
 9. Vérifier l’indication **ÉTOILE VERROUILLÉE**.
-10. Arrêter l’AstroTrac et appuyer sur **1. Acquérir la référence**.
-11. Après au moins 12 secondes, appuyer sur **Figer la référence**.
-12. Démarrer le suivi sidéral de l’AstroTrac, puis appuyer sur
+10. Pour la mise au point, lancer **Mode Focus**, ajuster lentement la bague et
+    rechercher le HFR minimal avant de quitter ce mode.
+11. Arrêter l’AstroTrac et appuyer sur **1. Acquérir la référence**.
+12. Après au moins 12 secondes, appuyer sur **Figer la référence**.
+13. Démarrer le suivi sidéral de l’AstroTrac, puis appuyer sur
     **2. Démarrer la mesure**.
-13. Observer la dérive en pixels par minute et l’écart orange à la droite figée.
+14. Observer la dérive en pixels par minute et l’écart orange à la droite figée.
 
 ## Diagnostics
 
