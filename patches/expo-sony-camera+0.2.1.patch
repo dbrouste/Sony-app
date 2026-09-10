@@ -936,7 +936,7 @@ index e97326d..81a7d82 100644
        requestMethod = "GET"
        connectTimeout = 3_000
 diff --git a/node_modules/expo-sony-camera/build/SonyCamera.types.d.ts b/node_modules/expo-sony-camera/build/SonyCamera.types.d.ts
-index 1858ee5..f3e96f5 100644
+index 1858ee5..72c152d 100644
 --- a/node_modules/expo-sony-camera/build/SonyCamera.types.d.ts
 +++ b/node_modules/expo-sony-camera/build/SonyCamera.types.d.ts
 @@ -113,10 +113,74 @@ export type SonyFocusResult = {
