@@ -5,6 +5,7 @@ import {
   ActivityIndicator,
   Pressable,
   SafeAreaView,
+  ScrollView,
   StatusBar,
   StyleSheet,
   Text,
@@ -339,7 +340,10 @@ export default function PolarAlignmentScreen({ onClose }: Props) {
         </Text>
       </View>
 
-      <View style={styles.controlColumn}>
+      <ScrollView
+        style={styles.controlColumn}
+        contentContainerStyle={styles.controlContent}
+        showsVerticalScrollIndicator>
         <View style={styles.panel}>
           <Text style={styles.panelTitle}>Direction cible</Text>
           <Text style={styles.value}>
@@ -437,7 +441,7 @@ export default function PolarAlignmentScreen({ onClose }: Props) {
             <Text style={styles.buttonText}>Retour au Live View</Text>
           </Pressable>
         </View>
-      </View>
+      </ScrollView>
     </SafeAreaView>
   );
 }
@@ -448,11 +452,15 @@ const styles = StyleSheet.create({
   controlColumn: {
     flex: 1,
     maxWidth: 560,
-    padding: 20,
-    gap: 10,
     borderLeftWidth: 1,
     borderLeftColor: '#202836',
     backgroundColor: '#0d121a',
+  },
+  controlContent: {
+    flexGrow: 1,
+    padding: 20,
+    paddingBottom: 32,
+    gap: 10,
   },
   title: { color: '#f3f6fa', fontSize: 28, fontWeight: '900' },
   subtitle: {
