@@ -281,14 +281,14 @@ export default function PolarAlignmentScreen({ onClose }: Props) {
   const target = location ? targetForLatitude(location.coords.latitude) : null;
   const horizontalOffset = sample
     ? clamp(
-        -sample.azimuthErrorDeg * TARGET_SCALE_PX_PER_DEGREE,
+        sample.azimuthErrorDeg * TARGET_SCALE_PX_PER_DEGREE,
         -TARGET_MAX_OFFSET_PX,
         TARGET_MAX_OFFSET_PX
       )
     : 0;
   const verticalOffset = sample
     ? clamp(
-        sample.altitudeErrorDeg * TARGET_SCALE_PX_PER_DEGREE,
+        -sample.altitudeErrorDeg * TARGET_SCALE_PX_PER_DEGREE,
         -TARGET_MAX_OFFSET_PX,
         TARGET_MAX_OFFSET_PX
       )
