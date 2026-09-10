@@ -25,6 +25,7 @@ sélectionner automatiquement jusqu’à 12 étoiles et suit leur déplacement c
 | Suivi multi-étoiles | Implémenté, à tester | Consensus robuste des vecteurs puis moyenne pondérée par SNR et HFD |
 | Suivi du centroïde de l’étoile | Validé sur le ciel | Calcul natif Android à 5 mesures/s, inspiré de PHD2 |
 | Mode Focus multi-étoiles | Implémenté, à tester | HFR médian sur 1 à 12 étoiles et médiane glissante sur 7 images |
+| Assistant de prise de vue BULB | Implémenté, à tester | Pose unique ou timelapse, 5–300 s, ISO Sony et pause de 1 s |
 | Filtrage temporel sur 1 seconde | Validé sur le ciel | Régression pour l’affichage et médiane par seconde pour la trace |
 | Qualité Live View maximale | Implémentée, à confirmer | Demande de taille Sony `M` si disponible, sinon repli automatique |
 | Réduction de la latence d’affichage | Implémentée, à tester | Les anciennes images sont abandonnées au lieu d’être mises en file |
@@ -160,6 +161,24 @@ de 5 % du minimum, orange entre 5 et 15 %, et rouge au-delà de 15 %. Une alerte
 signale les étoiles saturées, trop faibles ou perdues. **Réinitialiser le meilleur
 HFR** permet de recommencer une recherche sans quitter le mode.
 
+### Assistant de prise de vue
+
+Le bouton **Assistant prise de vue** ouvre une télécommande BULB distincte. Elle
+permet de :
+
+- régler le temps de pose de 5 à 300 secondes avec un pas de 5 secondes ;
+- choisir une valeur ISO parmi celles annoncées par le boîtier ;
+- prendre une photo unique ;
+- démarrer un timelapse continu avec une seconde entre la fin d’une pose et le
+  début de la suivante ;
+- interrompre proprement la pose en cours et fermer l’obturateur.
+
+La durée est chronométrée dans le module Android natif et l’écran est maintenu
+allumé pendant chaque pose. Le Live View est arrêté avant la séquence puis
+redémarré à la fin s’il était actif. Le Sony doit être placé en mode BULB et la
+réduction de bruit longue pose doit être désactivée pour éviter un dark interne
+après chaque image. Cette fonction nécessite l’APK natif `0.1.5` ou plus récent.
+
 ### Droite robuste
 
 La direction de la trace est estimée en trois étapes :
@@ -207,6 +226,8 @@ du zoom d’affichage.
 13. Démarrer le suivi sidéral de l’AstroTrac, puis appuyer sur
     **2. Démarrer la mesure**.
 14. Observer la dérive en pixels par minute et l’écart orange à la droite figée.
+15. Pour photographier, revenir à l’écran principal, ouvrir **Assistant prise de vue**,
+    choisir le temps et l’ISO, puis lancer une photo ou le timelapse.
 
 ## Diagnostics
 
@@ -346,6 +367,8 @@ Un nouveau build Android reste obligatoire après une modification de :
 
 - seul le Sony A7R II avec Smart Remote Control a été testé ;
 - le suivi multi-étoiles nécessite l’APK natif `0.1.3` ou plus récent ;
+- l’assistant BULB nécessite l’APK natif `0.1.5` ou plus récent et reste à valider
+  sur l’A7R II avec Smart Remote Control ;
 - la qualité du Live View reste limitée par ce que le boîtier transmet ;
 - le zoom de l’application n’ajoute aucun détail à l’image source ;
 - le suivi suppose une étoile suffisamment contrastée et peu de sources plus
