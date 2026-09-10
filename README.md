@@ -5,11 +5,9 @@ Application Android expérimentale pour aider à l’alignement polaire d’une 
 
 Le téléphone se connecte directement au Wi-Fi créé par l’application
 **Smart Remote Control** du Sony A7R II. Il affiche le Live View, permet de
-sélectionner une étoile et suit sa position afin de mesurer sa dérive.
+sélectionner automatiquement jusqu’à 12 étoiles et suit leur déplacement commun afin de mesurer la dérive.
 
-> Le projet est encore en phase de validation sur le ciel. Il ne commande pas
-> l’AstroTrac et ne fournit pas encore automatiquement le sens de correction des
-> vis d’azimut et d’altitude.
+> La chaîne mono-étoile a été validée sur le ciel. Le suivi multi-étoiles et la mesure complète de dérive restent à valider sur le terrain. L’application ne commande pas l’AstroTrac et ne fournit pas encore automatiquement le sens de correction des vis d’azimut et d’altitude.
 
 ## État du projet
 
@@ -22,7 +20,8 @@ sélectionner une étoile et suit sa position afin de mesurer sa dérive.
 | Zoom tactile et boutons +/− | Validé | Zoom d’affichage de ×1 à ×10 |
 | Déplacement dans l’image zoomée | Validé | Glissement à un doigt |
 | Sélection d’une étoile par toucher | Validée | Les coordonnées tiennent compte du zoom et du déplacement |
-| Sélection automatique d’une étoile | Validée en mono-étoile | Le nouveau mode choisit de 1 à 12 étoiles avec une large marge au bord |
+| Sélection automatique d’une étoile | Validée sur le ciel | Perte/reprise, étoile faible, saturation et perturbations testées en mono-étoile |
+| Sélection automatique multi-étoiles | Implémentée, à tester | Choisit de 1 à 12 étoiles isolées, non saturées et éloignées des bords |
 | Suivi multi-étoiles | Implémenté, à tester | Consensus robuste des vecteurs puis moyenne pondérée par SNR et HFD |
 | Suivi du centroïde de l’étoile | Validé sur le ciel | Calcul natif Android à 5 mesures/s, inspiré de PHD2 |
 | Filtrage temporel sur 1 seconde | Validé sur le ciel | Régression pour l’affichage et médiane par seconde pour la trace |
@@ -82,6 +81,8 @@ Pendant le Live View :
 - glisser à un doigt pour déplacer l’image lorsqu’elle est zoomée ;
 - toucher brièvement une étoile pour la sélectionner ;
 - utiliser **Sélection automatique** pour rechercher de 1 à 12 étoiles non saturées, isolées et éloignées des bords ;
+- contrôler l’état de chaque étoile : vert = retenue, jaune = rejetée par le consensus, rouge = perdue ;
+- vérifier l’indication `X/Y ÉTOILES VERROUILLÉES` et le temps de traitement natif ;
 - utiliser **Réinitialiser zoom et sélection** pour recommencer.
 
 Le zoom est uniquement un agrandissement de l’image reçue. Il ne modifie pas le
@@ -190,10 +191,13 @@ déconnecté, le message `Sony live-view stream ended` est normal.
 Le module Sony contient du code Kotlin natif. L’application ne fonctionne donc
 pas dans Expo Go ni directement dans un navigateur.
 
-Dans un Codespace :
+Dans un Codespace propre et synchronisé :
 
 ```bash
-npm install
+git status --short
+git pull --ff-only origin main
+npm ci
+npm run typecheck
 npx expo-doctor
 npx eas-cli@latest env:set \
   --environment preview \
@@ -203,7 +207,17 @@ npx eas-cli@latest env:set \
 npx eas-cli@latest build --platform android --profile preview
 ```
 
-Le profil `preview` produit un APK installable directement sur Android.
+Le profil `preview` produit un APK installable directement sur Android. Avant le build, `git status --short` doit idéalement être vide et `git rev-parse --short HEAD` doit correspondre au commit attendu.
+
+Si `patch-package` signale qu’il ne peut pas appliquer `patches/expo-sony-camera+0.2.1.patch`, le dossier `node_modules` contient généralement une ancienne modification. Relancer une installation déterministe :
+
+```bash
+npm ci
+grep -n "MAX_TRACKING_STARS = 12" \
+  node_modules/expo-sony-camera/android/src/main/java/expo/modules/sonycamera/SonyCameraModule.kt
+```
+
+La seconde commande doit retrouver la constante native du suivi multi-étoiles. `grep` est utilisé car `rg` n’est pas installé par défaut dans tous les Codespaces.
 
 ## Mises à jour EAS Update
 
@@ -243,16 +257,17 @@ Un nouveau build Android reste obligatoire après une modification de :
 
 ### Validation immédiate
 
-- vérifier que la file d’images ne crée plus plusieurs secondes de retard ;
-- mesurer la latence réelle entre un mouvement devant le Sony et l’écran ;
-- confirmer la résolution Live View effectivement fournie par l’A7R II ;
-- tester la stabilité du verrouillage sur des étoiles de luminosités différentes ;
-- vérifier la sélection automatique, son temps de réponse et le candidat choisi ;
-- comparer le bruit des positions brutes et filtrées sur une minute ;
-- vérifier le rejet des faux points et la droite robuste sur une séquence réelle ;
-- comparer l’angle et le bruit obtenus avec 1, 4, 8 et 12 étoiles ;
-- masquer plusieurs étoiles et vérifier le repli progressif jusqu’au suivi mono-étoile ;
-- valider le téléchargement et l’application d’une première mise à jour OTA.
+- [x] valider la sélection automatique mono-étoile ;
+- [x] vérifier la perte puis la reprise du verrouillage ;
+- [x] tester une étoile faible et une étoile saturée ;
+- [x] vérifier le rejet d’une mesure perturbée et la stabilité de la droite robuste ;
+- [ ] vérifier que la file d’images ne crée plus plusieurs secondes de retard ;
+- [ ] mesurer la latence réelle entre un mouvement devant le Sony et l’écran ;
+- [ ] confirmer la résolution Live View effectivement fournie par l’A7R II ;
+- [ ] comparer le bruit des positions brutes et filtrées sur une minute ;
+- [ ] comparer l’angle et le bruit obtenus avec 1, 4, 8 et 12 étoiles ;
+- [ ] masquer plusieurs étoiles et vérifier le repli progressif jusqu’au suivi mono-étoile ;
+- [ ] valider le téléchargement et l’application d’une première mise à jour OTA.
 
 ### Alignement par dérive
 
