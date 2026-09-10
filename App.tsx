@@ -2,6 +2,7 @@ import SonyCamera, { SonyCameraView } from 'expo-sony-camera';
 import type { SonyCameraState, SonyStarTrackingSample } from 'expo-sony-camera';
 import * as Updates from 'expo-updates';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import PolarAlignmentScreen from './PolarAlignmentScreen';
 import {
   ActivityIndicator,
   PanResponder,
@@ -396,6 +397,7 @@ function ActionButton({
 
 export default function App() {
   const camera = SonyCamera;
+  const [activeScreen, setActiveScreen] = useState<'camera' | 'polar'>('camera');
   const [cameraState, setCameraState] = useState<SonyCameraState | null>(() =>
     camera ? camera.getState() : null
   );
@@ -990,6 +992,10 @@ export default function App() {
     void run('Déconnexion', () => camera!.disconnect());
   }
 
+  if (activeScreen === 'polar') {
+    return <PolarAlignmentScreen onClose={() => setActiveScreen('camera')} />;
+  }
+
   if (!camera) {
     return (
       <SafeAreaView style={styles.centeredPage}>
@@ -1432,6 +1438,11 @@ export default function App() {
           ) : null}
 
           <View style={styles.buttonGrid}>
+            <ActionButton
+              title="Pré-alignement polaire au téléphone"
+              onPress={() => setActiveScreen('polar')}
+              disabled={busy}
+            />
             <ActionButton
               title="Connexion Wi-Fi Sony"
               onPress={connect}

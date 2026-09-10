@@ -32,6 +32,7 @@ sélectionner automatiquement jusqu’à 12 étoiles et suit leur déplacement c
 | Droite robuste de la trace | Validée sur le ciel | Ajustement robuste et rejet des points aberrants |
 | Référence monture arrêtée | Implémentée, à tester | Acquisition guidée puis gel de la droite robuste |
 | Mesure de dérive signée | Implémentée, à tester | Écart perpendiculaire et pente robuste en pixels par minute |
+| Pré-alignement avec le téléphone | Implémenté, à tester | GPS, accéléromètre et magnétomètre ; l’écran fait face au pôle |
 | EAS Update | Configuré | Vérification et installation également disponibles depuis l’application |
 | Identification de la version | Implémentée | SHA Git publié et identifiant court de l’OTA exécutée |
 | Guidage azimut/altitude complet | À développer | Voir la feuille de route |
@@ -51,6 +52,30 @@ L’application sépare désormais l’acquisition de la trace, le gel de la dro
 référence et la mesure de dérive lorsque le suivi sidéral est redémarré.
 
 ## Fonctions actuellement disponibles
+
+### Pré-alignement avec le téléphone
+
+Le bouton **Pré-alignement polaire au téléphone** ouvre un écran indépendant du
+Sony. Le téléphone doit être posé de façon que le plan de l’écran soit
+perpendiculaire à l’axe polaire et que l’écran soit tourné vers le pôle céleste
+visible. L’application choisit automatiquement le pôle Sud ou Nord d’après la
+latitude GPS.
+
+L’accéléromètre fournit la verticale et le magnétomètre le Nord magnétique. La
+différence entre les caps magnétique et vrai fournis par Android corrige la
+déclinaison locale. L’application compare alors la normale sortant de l’écran à
+la direction théorique du pôle et affiche :
+
+- une cible à centrer ;
+- l’erreur totale en degrés ;
+- les corrections d’azimut vers l’Est ou l’Ouest ;
+- la correction d’altitude à monter ou descendre ;
+- la qualité du compas et l’intensité du champ magnétique.
+
+Cette fonction accepte volontairement l’imprécision et les perturbations
+magnétiques de la monture. Elle sert uniquement à approcher rapidement le pôle ;
+la mise en station doit ensuite être terminée avec l’alignement par dérive.
+Elle nécessite l’APK natif `0.1.4` ou plus récent.
 
 ### Connexion au Sony
 
