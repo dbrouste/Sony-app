@@ -139,6 +139,7 @@ export default function CaptureAssistantScreen({
   const [exposureType, setExposureType] = useState<ExposureType>('standard30');
   const [isoValues, setIsoValues] = useState(FALLBACK_ISO);
   const [selectedIso, setSelectedIso] = useState('800');
+  const [remoteIsoAvailable, setRemoteIsoAvailable] = useState<boolean | null>(null);
   const [mode, setMode] = useState<CaptureMode>('idle');
   const [photoCount, setPhotoCount] = useState(0);
   const [exposureEndsAt, setExposureEndsAt] = useState<number | null>(null);
@@ -155,6 +156,7 @@ export default function CaptureAssistantScreen({
       .getIsoSpeedRates()
       .then((settings) => {
         if (!mounted) return;
+        setRemoteIsoAvailable(true);
         const values = settings.available
           .filter((value) => value !== 'AUTO' && /^\d+$/.test(value))
           .sort((left, right) => Number(left) - Number(right));
@@ -164,7 +166,9 @@ export default function CaptureAssistantScreen({
         }
       })
       .catch((error) => {
-        if (mounted) setStatus(`Valeurs ISO standards affichées · lecture Sony impossible : ${errorMessage(error)}`);
+        if (!mounted) return;
+        setRemoteIsoAvailable(false);
+        setStatus(`Réglage ISO à faire sur le boîtier · ${errorMessage(error)}`);
       });
     return () => {
       mounted = false;
@@ -212,8 +216,12 @@ export default function CaptureAssistantScreen({
     setExposureEndsAt(Date.now() + duration * 1_000);
     setStatus(
       exposureType === 'standard30'
-        ? `Pose standard 30 s · RAW 14 bits · ISO ${selectedIso}`
-        : `Pose BULB · RAW 12 bits · ISO ${selectedIso}`
+        ? remoteIsoAvailable === false
+          ? 'Pose standard · réglages 30 s et ISO conservés sur le boîtier'
+          : `Pose standard 30 s · RAW 14 bits · ISO ${selectedIso}`
+        : remoteIsoAvailable === false
+          ? 'Pose BULB · ISO conservé sur le boîtier'
+          : `Pose BULB · RAW 12 bits · ISO ${selectedIso}`
     );
     try {
       return exposureType === 'standard30'
@@ -353,12 +361,17 @@ export default function CaptureAssistantScreen({
 
         <View style={styles.panel}>
           <Text style={styles.label}>ISO</Text>
+          {remoteIsoAvailable === false ? (
+            <Text style={styles.manualSetting}>
+              Régle l’ISO sur le boîtier : ce mode Sony ne permet pas de le modifier à distance.
+            </Text>
+          ) : null}
           <View style={styles.isoGrid}>
             {isoValues.map((iso) => (
               <Pressable
                 key={iso}
                 accessibilityRole="button"
-                disabled={active}
+                disabled={active || remoteIsoAvailable === false}
                 onPress={() => setSelectedIso(iso)}
                 style={({ pressed }) => [
                   styles.isoButton,
@@ -405,7 +418,7 @@ export default function CaptureAssistantScreen({
         </View>
 
         <Text style={styles.footer}>
-          Le timelapse attend 1 seconde après la fin de chaque pose. L’écran reste actif pendant la pose. Utilise le mode 30 s standard pour le RAW 14 bits et BULB pour les poses longues en 12 bits. La réduction de bruit longue pose doit être désactivée.
+          Le timelapse attend 1 seconde après la fin de chaque pose. L’écran reste actif pendant la pose. Si les réglages distants sont indisponibles, règle 30 s ou BULB et l’ISO sur le boîtier. Utilise le mode 30 s standard pour le RAW 14 bits et BULB pour les poses longues en 12 bits. La réduction de bruit longue pose doit être désactivée.
         </Text>
       </ScrollView>
     </SafeAreaView>
@@ -439,6 +452,7 @@ const styles = StyleSheet.create({
   isoButtonSelected: { borderColor: '#f4c95d', backgroundColor: '#4c4020' },
   isoText: { color: '#bdc7d5', fontSize: 15, fontWeight: '700' },
   isoTextSelected: { color: '#fff4c7' },
+  manualSetting: { color: '#f4c95d', fontSize: 13, lineHeight: 19, marginTop: 10 },
   statusPanel: { alignItems: 'center', gap: 9, padding: 20, borderRadius: 16, backgroundColor: '#0e141e' },
   status: { color: '#d9e1ec', fontSize: 16, textAlign: 'center' },
   countdown: { color: '#f4c95d', fontSize: 28, fontWeight: '900' },

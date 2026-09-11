@@ -968,7 +968,7 @@ index 80dc3a8..facb6c3 100644
    }
  
 diff --git a/node_modules/expo-sony-camera/android/src/main/java/expo/modules/sonycamera/SonyScalarWebApiTransport.kt b/node_modules/expo-sony-camera/android/src/main/java/expo/modules/sonycamera/SonyScalarWebApiTransport.kt
-index e97326d..d1905f1 100644
+index e97326d..af0009f 100644
 --- a/node_modules/expo-sony-camera/android/src/main/java/expo/modules/sonycamera/SonyScalarWebApiTransport.kt
 +++ b/node_modules/expo-sony-camera/android/src/main/java/expo/modules/sonycamera/SonyScalarWebApiTransport.kt
 @@ -48,15 +48,25 @@ internal class SonyScalarWebApiTransport private constructor(
@@ -1059,7 +1059,7 @@ index e97326d..d1905f1 100644
    }
  
    private fun refreshAvailableApis() {
-@@ -165,6 +201,68 @@ internal class SonyScalarWebApiTransport private constructor(
+@@ -165,6 +201,79 @@ internal class SonyScalarWebApiTransport private constructor(
  
    fun supportsTouchFocus(): Boolean = availableApis.contains("setTouchAFPosition")
  
@@ -1080,11 +1080,14 @@ index e97326d..d1905f1 100644
 +  }
 +
 +  fun startBulbShooting(iso: String) {
-+    if (!availableApis.contains("setIsoSpeedRate")) {
-+      throw SonyPtpException("This Sony mode does not expose ISO selection.")
++    // Older Smart Remote Control modes can expose shutter control without
++    // exposing remote ISO selection. Keep the ISO selected on the camera.
++    if (availableApis.contains("setIsoSpeedRate")) {
++      call("setIsoSpeedRate", JSONArray().put(iso))
++      trace("Scalar ISO set to $iso")
++    } else {
++      trace("Scalar ISO selection unavailable; keeping the camera ISO")
 +    }
-+    call("setIsoSpeedRate", JSONArray().put(iso))
-+    trace("Scalar ISO set to $iso")
 +    if (availableApis.contains("setShutterSpeed")) {
 +      call("setShutterSpeed", JSONArray().put("BULB"))
 +      trace("Scalar shutter speed set to BULB")
@@ -1107,12 +1110,20 @@ index e97326d..d1905f1 100644
 +  }
 +
 +  fun captureThirtySecondPhoto(iso: String): Long {
-+    if (!availableApis.contains("setIsoSpeedRate") || !availableApis.contains("setShutterSpeed")) {
-+      throw SonyPtpException("This Sony mode cannot configure ISO and a 30-second shutter speed.")
++    // Macro_railv2 proves that actTakePicture works directly after startRecMode.
++    // Apply settings only when this camera mode advertises the optional APIs.
++    if (availableApis.contains("setIsoSpeedRate")) {
++      call("setIsoSpeedRate", JSONArray().put(iso))
++      trace("Scalar ISO set to $iso")
++    } else {
++      trace("Scalar ISO selection unavailable; keeping the camera ISO")
 +    }
-+    call("setIsoSpeedRate", JSONArray().put(iso))
-+    call("setShutterSpeed", JSONArray().put("30\""))
-+    trace("Scalar standard exposure configured ISO=$iso shutter=30s")
++    if (availableApis.contains("setShutterSpeed")) {
++      call("setShutterSpeed", JSONArray().put("30\""))
++      trace("Scalar shutter speed set to 30s")
++    } else {
++      trace("Scalar shutter selection unavailable; using the camera shutter speed")
++    }
 +    refreshAvailableApis()
 +    trace("Scalar API list after 30s selection=${availableApis.sorted().joinToString(",")}")
 +    if (!availableApis.contains("actTakePicture")) {
@@ -1128,7 +1139,7 @@ index e97326d..d1905f1 100644
    fun focusAt(x: Double, y: Double): String {
      if (!supportsTouchFocus()) return "unsupported"
      call("setTouchAFPosition", JSONArray().put(x * 100.0).put(y * 100.0))
-@@ -177,12 +275,35 @@ internal class SonyScalarWebApiTransport private constructor(
+@@ -177,12 +286,35 @@ internal class SonyScalarWebApiTransport private constructor(
  
    fun startLiveView() {
      closeLiveStream()
@@ -1169,7 +1180,7 @@ index e97326d..d1905f1 100644
      val connection = network.open(activeLiveViewUrl).apply {
        requestMethod = "GET"
        connectTimeout = 3_000
-@@ -308,6 +429,16 @@ internal class SonyScalarWebApiTransport private constructor(
+@@ -308,6 +440,16 @@ internal class SonyScalarWebApiTransport private constructor(
  
    fun stopLiveView() {
      closeLiveStream()
