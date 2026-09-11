@@ -182,7 +182,9 @@ Android natif ; l’A7R II produit alors un RAW 12 bits. L’écran est maintenu
 pendant chaque pose. Le Live View est arrêté avant la séquence puis redémarré à
 la fin s’il était actif. La réduction de bruit longue pose doit être désactivée
 pour éviter un dark interne après chaque image. Cette fonction nécessite l’APK
-natif `0.1.6` ou plus récent.
+natif `0.2.1` ou plus récent. Sur l’A7R II, l’application quitte explicitement
+le Live View distant avant une pose, puis recharge les commandes annoncées par
+le boîtier après la sélection de `30 s` ou `BULB`.
 
 ### Plate solving hors ligne
 
@@ -203,7 +205,9 @@ ordinateur et de les importer avec le sélecteur Android.
 Les index sont conservés dans le dossier externe propre à l’application. Une mise
 à jour de l’APK ne les efface pas ; une désinstallation complète ou un effacement
 des données les supprime. Il faut télécharger ou importer le catalogue avant de
-connecter le téléphone au Wi-Fi sans Internet du Sony.
+connecter le téléphone au Wi-Fi sans Internet du Sony. L’écran **Plate solving
+hors ligne** reste accessible lorsque le boîtier est déconnecté afin de
+télécharger les index avec la connexion Internet habituelle du téléphone.
 
 La focale sélectionnée sert à borner l’échelle recherchée à ±25 %. La solution
 affiche le centre RA/Dec, la rotation du champ, l’échelle en secondes d’arc par
@@ -404,7 +408,7 @@ Un nouveau build Android reste obligatoire après une modification de :
 
 - seul le Sony A7R II avec Smart Remote Control a été testé ;
 - le suivi multi-étoiles nécessite l’APK natif `0.1.3` ou plus récent ;
-- l’assistant de prise de vue nécessite l’APK natif `0.1.6` ou plus récent et reste à valider
+- l’assistant de prise de vue nécessite l’APK natif `0.2.1` ou plus récent et reste à valider
   sur l’A7R II avec Smart Remote Control ;
 - la qualité du Live View reste limitée par ce que le boîtier transmet ;
 - le plate solving exige suffisamment d’étoiles visibles dans le JPEG Live View et reste à valider sur le ciel ;

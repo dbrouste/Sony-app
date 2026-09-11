@@ -968,7 +968,7 @@ index 80dc3a8..facb6c3 100644
    }
  
 diff --git a/node_modules/expo-sony-camera/android/src/main/java/expo/modules/sonycamera/SonyScalarWebApiTransport.kt b/node_modules/expo-sony-camera/android/src/main/java/expo/modules/sonycamera/SonyScalarWebApiTransport.kt
-index e97326d..051b2e9 100644
+index e97326d..d1905f1 100644
 --- a/node_modules/expo-sony-camera/android/src/main/java/expo/modules/sonycamera/SonyScalarWebApiTransport.kt
 +++ b/node_modules/expo-sony-camera/android/src/main/java/expo/modules/sonycamera/SonyScalarWebApiTransport.kt
 @@ -48,15 +48,25 @@ internal class SonyScalarWebApiTransport private constructor(
@@ -1059,7 +1059,7 @@ index e97326d..051b2e9 100644
    }
  
    private fun refreshAvailableApis() {
-@@ -165,6 +201,62 @@ internal class SonyScalarWebApiTransport private constructor(
+@@ -165,6 +201,68 @@ internal class SonyScalarWebApiTransport private constructor(
  
    fun supportsTouchFocus(): Boolean = availableApis.contains("setTouchAFPosition")
  
@@ -1080,9 +1080,6 @@ index e97326d..051b2e9 100644
 +  }
 +
 +  fun startBulbShooting(iso: String) {
-+    if (!availableApis.contains("startBulbShooting") || !availableApis.contains("stopBulbShooting")) {
-+      throw SonyPtpException("This Sony mode does not expose BULB shooting.")
-+    }
 +    if (!availableApis.contains("setIsoSpeedRate")) {
 +      throw SonyPtpException("This Sony mode does not expose ISO selection.")
 +    }
@@ -1091,6 +1088,13 @@ index e97326d..051b2e9 100644
 +    if (availableApis.contains("setShutterSpeed")) {
 +      call("setShutterSpeed", JSONArray().put("BULB"))
 +      trace("Scalar shutter speed set to BULB")
++    }
++    // Sony changes the advertised command set according to the current shutter mode.
++    // On the A7R II, the BULB commands can appear only after BULB has been selected.
++    refreshAvailableApis()
++    trace("Scalar API list after BULB selection=${availableApis.sorted().joinToString(",")}")
++    if (!availableApis.contains("startBulbShooting") || !availableApis.contains("stopBulbShooting")) {
++      throw SonyPtpException("This Sony mode does not expose BULB shooting after selecting BULB.")
 +    }
 +    call("startBulbShooting")
 +    trace("Scalar BULB shutter opened")
@@ -1103,15 +1107,17 @@ index e97326d..051b2e9 100644
 +  }
 +
 +  fun captureThirtySecondPhoto(iso: String): Long {
-+    if (!availableApis.contains("actTakePicture")) {
-+      throw SonyPtpException("This Sony mode does not expose remote still capture.")
-+    }
 +    if (!availableApis.contains("setIsoSpeedRate") || !availableApis.contains("setShutterSpeed")) {
 +      throw SonyPtpException("This Sony mode cannot configure ISO and a 30-second shutter speed.")
 +    }
 +    call("setIsoSpeedRate", JSONArray().put(iso))
 +    call("setShutterSpeed", JSONArray().put("30\""))
 +    trace("Scalar standard exposure configured ISO=$iso shutter=30s")
++    refreshAvailableApis()
++    trace("Scalar API list after 30s selection=${availableApis.sorted().joinToString(",")}")
++    if (!availableApis.contains("actTakePicture")) {
++      throw SonyPtpException("This Sony mode does not expose remote still capture after selecting 30 seconds.")
++    }
 +    val startedAt = System.currentTimeMillis()
 +    // The returned post-view URL is deliberately ignored: the RAW remains on the camera card.
 +    call("actTakePicture", timeoutMs = 50_000)
@@ -1122,7 +1128,7 @@ index e97326d..051b2e9 100644
    fun focusAt(x: Double, y: Double): String {
      if (!supportsTouchFocus()) return "unsupported"
      call("setTouchAFPosition", JSONArray().put(x * 100.0).put(y * 100.0))
-@@ -177,12 +269,35 @@ internal class SonyScalarWebApiTransport private constructor(
+@@ -177,12 +275,35 @@ internal class SonyScalarWebApiTransport private constructor(
  
    fun startLiveView() {
      closeLiveStream()
@@ -1163,6 +1169,23 @@ index e97326d..051b2e9 100644
      val connection = network.open(activeLiveViewUrl).apply {
        requestMethod = "GET"
        connectTimeout = 3_000
+@@ -308,6 +429,16 @@ internal class SonyScalarWebApiTransport private constructor(
+ 
+   fun stopLiveView() {
+     closeLiveStream()
++    if (availableApis.contains("stopLiveview")) {
++      runCatching { call("stopLiveview", timeoutMs = 10_000) }
++        .onSuccess { trace("Scalar remote Live View stopped") }
++        .onFailure { trace("Scalar stopLiveview failed: ${it.message ?: "unknown"}") }
++    }
++    // Shooting-related commands are state-dependent on legacy Sony bodies.
++    // Re-read them after the camera has actually left Live View.
++    runCatching { refreshAvailableApis() }
++      .onSuccess { trace("Scalar API list after Live View stop=${availableApis.sorted().joinToString(",")}") }
++      .onFailure { trace("Scalar API refresh after Live View stop failed: ${it.message ?: "unknown"}") }
+   }
+ 
+   fun close() {
 diff --git a/node_modules/expo-sony-camera/build/SonyCamera.types.d.ts b/node_modules/expo-sony-camera/build/SonyCamera.types.d.ts
 index 1858ee5..db4e3eb 100644
 --- a/node_modules/expo-sony-camera/build/SonyCamera.types.d.ts
@@ -1253,7 +1276,7 @@ index 1858ee5..db4e3eb 100644
  export type SonyCameraViewProps = {
      active?: boolean;
 diff --git a/node_modules/expo-sony-camera/build/SonyCameraModule.d.ts b/node_modules/expo-sony-camera/build/SonyCameraModule.d.ts
-index 6e395a0..5f291e7 100644
+index 6e395a0..a9f0060 100644
 --- a/node_modules/expo-sony-camera/build/SonyCameraModule.d.ts
 +++ b/node_modules/expo-sony-camera/build/SonyCameraModule.d.ts
 @@ -1,5 +1,5 @@

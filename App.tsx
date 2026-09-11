@@ -1467,7 +1467,7 @@ export default function App() {
             <ActionButton
               title="Plate solving hors ligne"
               onPress={() => setActiveScreen('plate')}
-              disabled={busy || !connected}
+              disabled={busy}
             />
             <ActionButton
               title="Connexion Wi-Fi Sony"

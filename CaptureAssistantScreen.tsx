@@ -19,7 +19,7 @@ const MIN_EXPOSURE_SECONDS = 5;
 const MAX_EXPOSURE_SECONDS = 300;
 const EXPOSURE_STEP_SECONDS = 5;
 const INTERVAL_SECONDS = 1;
-const FALLBACK_ISO = ['100', '200', '400', '800', '1600', '3200', '6400', '12800'];
+const FALLBACK_ISO = ['100', '200', '400', '640', '800', '1600', '3200', '6400', '12800'];
 
 type CaptureMode = 'idle' | 'single' | 'timelapse' | 'stopping';
 type ExposureType = 'standard30' | 'bulb';
