@@ -22,6 +22,7 @@ const INTERVAL_SECONDS = 1;
 const FALLBACK_ISO = ['100', '200', '400', '800', '1600', '3200', '6400', '12800'];
 
 type CaptureMode = 'idle' | 'single' | 'timelapse' | 'stopping';
+type ExposureType = 'standard30' | 'bulb';
 
 type CameraClient = {
   getState(): SonyCameraState;
@@ -29,6 +30,7 @@ type CameraClient = {
   stopLiveView(): Promise<SonyCameraState>;
   getIsoSpeedRates(): Promise<SonyIsoSpeedRates>;
   captureBulb(exposureSeconds: number, iso: string): Promise<SonyBulbCaptureResult>;
+  captureThirtySecond(iso: string): Promise<SonyBulbCaptureResult>;
   cancelBulbCapture(): { ok: boolean; active: boolean };
 };
 
@@ -134,6 +136,7 @@ export default function CaptureAssistantScreen({
   onClose: () => void;
 }) {
   const [exposureSeconds, setExposureSeconds] = useState(60);
+  const [exposureType, setExposureType] = useState<ExposureType>('standard30');
   const [isoValues, setIsoValues] = useState(FALLBACK_ISO);
   const [selectedIso, setSelectedIso] = useState('800');
   const [mode, setMode] = useState<CaptureMode>('idle');
@@ -205,10 +208,17 @@ export default function CaptureAssistantScreen({
   }
 
   async function exposeOnce() {
-    setExposureEndsAt(Date.now() + exposureSeconds * 1_000);
-    setStatus(`Pose BULB · ISO ${selectedIso}`);
+    const duration = exposureType === 'standard30' ? 30 : exposureSeconds;
+    setExposureEndsAt(Date.now() + duration * 1_000);
+    setStatus(
+      exposureType === 'standard30'
+        ? `Pose standard 30 s · RAW 14 bits · ISO ${selectedIso}`
+        : `Pose BULB · RAW 12 bits · ISO ${selectedIso}`
+    );
     try {
-      return await camera.captureBulb(exposureSeconds, selectedIso);
+      return exposureType === 'standard30'
+        ? await camera.captureThirtySecond(selectedIso)
+        : await camera.captureBulb(exposureSeconds, selectedIso);
     } finally {
       setExposureEndsAt(null);
     }
@@ -253,8 +263,8 @@ export default function CaptureAssistantScreen({
       await prepareSequence();
       while (!stopRequestedRef.current) {
         const result = await exposeOnce();
+        if (!result.stoppedEarly) setPhotoCount((count) => count + 1);
         if (result.stoppedEarly || stopRequestedRef.current) break;
-        setPhotoCount((count) => count + 1);
         await waitBetweenPhotos();
       }
       setStatus('Timelapse arrêté.');
@@ -270,8 +280,12 @@ export default function CaptureAssistantScreen({
   function stopCapture() {
     stopRequestedRef.current = true;
     setMode('stopping');
-    setStatus('Arrêt demandé · fermeture de l’obturateur…');
-    camera.cancelBulbCapture();
+    if (exposureType === 'bulb') {
+      setStatus('Arrêt demandé · fermeture de l’obturateur…');
+      camera.cancelBulbCapture();
+    } else {
+      setStatus('Arrêt demandé · attente de la fin de la pose de 30 s…');
+    }
   }
 
   return (
@@ -280,21 +294,62 @@ export default function CaptureAssistantScreen({
         <View style={styles.header}>
           <View>
             <Text style={styles.title}>Prise de vue</Text>
-            <Text style={styles.subtitle}>Sony A7R II · BULB</Text>
+            <Text style={styles.subtitle}>Sony A7R II · RAW 14 bits ou BULB</Text>
           </View>
           <Button title="Retour" onPress={onClose} disabled={active} />
         </View>
 
         <View style={styles.panel}>
-          <Text style={styles.label}>Temps de pose</Text>
-          <Text style={styles.exposureValue}>{formatDuration(exposureSeconds)}</Text>
-          <ExposureSlider value={exposureSeconds} onChange={setExposureSeconds} disabled={active} />
-          <View style={styles.rangeRow}>
-            <Text style={styles.hint}>5 s</Text>
-            <Text style={styles.hint}>Pas de 5 s</Text>
-            <Text style={styles.hint}>5 min</Text>
+          <Text style={styles.label}>Mode d’exposition</Text>
+          <View style={styles.modeRow}>
+            <Pressable
+              accessibilityRole="button"
+              disabled={active}
+              onPress={() => setExposureType('standard30')}
+              style={({ pressed }) => [
+                styles.modeButton,
+                exposureType === 'standard30' && styles.modeButtonSelected,
+                active && styles.disabled,
+                pressed && !active && styles.buttonPressed,
+              ]}>
+              <Text style={styles.modeTitle}>30 s standard</Text>
+              <Text style={styles.modeDetail}>RAW 14 bits</Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              disabled={active}
+              onPress={() => setExposureType('bulb')}
+              style={({ pressed }) => [
+                styles.modeButton,
+                exposureType === 'bulb' && styles.modeButtonSelected,
+                active && styles.disabled,
+                pressed && !active && styles.buttonPressed,
+              ]}>
+              <Text style={styles.modeTitle}>BULB</Text>
+              <Text style={styles.modeDetail}>5–300 s · RAW 12 bits</Text>
+            </Pressable>
           </View>
         </View>
+
+        {exposureType === 'bulb' ? (
+          <View style={styles.panel}>
+            <Text style={styles.label}>Temps de pose BULB</Text>
+            <Text style={styles.exposureValue}>{formatDuration(exposureSeconds)}</Text>
+            <ExposureSlider value={exposureSeconds} onChange={setExposureSeconds} disabled={active} />
+            <View style={styles.rangeRow}>
+              <Text style={styles.hint}>5 s</Text>
+              <Text style={styles.hint}>Pas de 5 s</Text>
+              <Text style={styles.hint}>5 min</Text>
+            </View>
+          </View>
+        ) : (
+          <View style={styles.standardPanel}>
+            <Text style={styles.standardValue}>30 secondes</Text>
+            <Text style={styles.standardText}>
+              Pose temporisée par le boîtier afin de conserver la lecture RAW 14 bits de l’A7R II.
+            </Text>
+          </View>
+        )}
 
         <View style={styles.panel}>
           <Text style={styles.label}>ISO</Text>
@@ -329,7 +384,18 @@ export default function CaptureAssistantScreen({
 
         <View style={styles.actions}>
           {active ? (
-            <Button title={mode === 'stopping' ? 'Arrêt en cours…' : 'Arrêter'} onPress={stopCapture} disabled={mode === 'stopping'} danger />
+            <Button
+              title={
+                mode === 'stopping'
+                  ? 'Arrêt en cours…'
+                  : exposureType === 'standard30'
+                    ? 'Arrêter après cette pose'
+                    : 'Arrêter'
+              }
+              onPress={stopCapture}
+              disabled={mode === 'stopping'}
+              danger
+            />
           ) : (
             <>
               <Button title="Prendre une photo" onPress={() => void runSingle()} />
@@ -339,7 +405,7 @@ export default function CaptureAssistantScreen({
         </View>
 
         <Text style={styles.footer}>
-          Le timelapse attend 1 seconde après la fin de chaque pose. L’écran reste actif pendant la pose. Le boîtier doit être configuré pour la prise de vue BULB et la réduction de bruit longue pose doit être désactivée.
+          Le timelapse attend 1 seconde après la fin de chaque pose. L’écran reste actif pendant la pose. Utilise le mode 30 s standard pour le RAW 14 bits et BULB pour les poses longues en 12 bits. La réduction de bruit longue pose doit être désactivée.
         </Text>
       </ScrollView>
     </SafeAreaView>
@@ -355,6 +421,14 @@ const styles = StyleSheet.create({
   panel: { padding: 20, borderRadius: 16, backgroundColor: '#111722', borderWidth: 1, borderColor: '#202b3a' },
   label: { color: '#bdc7d5', fontSize: 16, fontWeight: '700' },
   exposureValue: { color: '#f4c95d', fontSize: 36, fontWeight: '900', marginVertical: 14, textAlign: 'center' },
+  modeRow: { flexDirection: 'row', gap: 12, marginTop: 14 },
+  modeButton: { flex: 1, minHeight: 78, alignItems: 'center', justifyContent: 'center', padding: 12, borderRadius: 12, borderWidth: 1, borderColor: '#40516a', backgroundColor: '#151e2b' },
+  modeButtonSelected: { borderColor: '#f4c95d', backgroundColor: '#4c4020' },
+  modeTitle: { color: '#f3f6fa', fontSize: 16, fontWeight: '800' },
+  modeDetail: { color: '#aab7c8', fontSize: 12, marginTop: 4, textAlign: 'center' },
+  standardPanel: { alignItems: 'center', padding: 20, borderRadius: 16, backgroundColor: '#14221d', borderWidth: 1, borderColor: '#356b54' },
+  standardValue: { color: '#54e397', fontSize: 30, fontWeight: '900' },
+  standardText: { color: '#b9d5c8', fontSize: 14, lineHeight: 20, marginTop: 8, textAlign: 'center' },
   slider: { height: 42, justifyContent: 'center', marginHorizontal: 10 },
   sliderFill: { position: 'absolute', left: 0, height: 7, borderRadius: 4, backgroundColor: '#f4c95d' },
   sliderThumb: { position: 'absolute', width: 28, height: 28, marginLeft: -14, borderRadius: 14, backgroundColor: '#f4c95d', borderWidth: 3, borderColor: '#fff4c7' },

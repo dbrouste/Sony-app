@@ -1,12 +1,12 @@
 diff --git a/node_modules/expo-sony-camera/android/src/main/java/expo/modules/sonycamera/SonyCameraController.kt b/node_modules/expo-sony-camera/android/src/main/java/expo/modules/sonycamera/SonyCameraController.kt
-index 18b5959..2a06729 100644
+index 18b5959..1c05b35 100644
 --- a/node_modules/expo-sony-camera/android/src/main/java/expo/modules/sonycamera/SonyCameraController.kt
 +++ b/node_modules/expo-sony-camera/android/src/main/java/expo/modules/sonycamera/SonyCameraController.kt
 @@ -57,6 +57,8 @@ internal class SonyCameraController(private val context: Context) {
    private val permissionRequestPending = AtomicBoolean(false)
    private val liveViewRequested = AtomicBoolean(false)
    private val streaming = AtomicBoolean(false)
-+  private val bulbCapturing = AtomicBoolean(false)
++  private val captureInProgress = AtomicBoolean(false)
 +  private val bulbStopRequested = AtomicBoolean(false)
    @Volatile private var lastScalarDiscoveryFinishedAt = 0L
    private val permissionAction = context.packageName + PERMISSION_ACTION_SUFFIX
@@ -20,7 +20,7 @@ index 18b5959..2a06729 100644
                listeners.forEach { it.onStateChanged(statePayload()) }
              }
              lastFrameJpeg = jpeg
-@@ -496,6 +498,82 @@ internal class SonyCameraController(private val context: Context) {
+@@ -496,6 +498,115 @@ internal class SonyCameraController(private val context: Context) {
      }
    }
  
@@ -39,7 +39,7 @@ index 18b5959..2a06729 100644
 +    if (streaming.get()) {
 +      throw SonyPtpException("Stop Live View before starting a BULB exposure.")
 +    }
-+    if (!bulbCapturing.compareAndSet(false, true)) {
++    if (!captureInProgress.compareAndSet(false, true)) {
 +      throw SonyPtpException("A BULB exposure is already in progress.")
 +    }
 +    bulbStopRequested.set(false)
@@ -87,12 +87,45 @@ index 18b5959..2a06729 100644
 +      throw cause
 +    } finally {
 +      bulbStopRequested.set(false)
-+      bulbCapturing.set(false)
++      captureInProgress.set(false)
++    }
++  }
++
++  fun captureThirtySecondBlocking(iso: String): Map<String, Any?> {
++    require(iso.isNotBlank()) { "ISO must not be empty." }
++    val activeScalar = scalarTransport
++      ?: throw SonyPtpException("Standard timed shooting is available only over Sony Wi-Fi.")
++    if (streaming.get()) {
++      throw SonyPtpException("Stop Live View before starting a timed exposure.")
++    }
++    if (!captureInProgress.compareAndSet(false, true)) {
++      throw SonyPtpException("A camera exposure is already in progress.")
++    }
++    return try {
++      executor.submit<Map<String, Any?>> {
++        updateState("capturing", "Standard 30 s · ISO $iso · RAW 14-bit capable")
++        val actualDurationMs = activeScalar.captureThirtySecondPhoto(iso)
++        if (scalarTransport === activeScalar) {
++          updateState("ready", "Standard 30-second exposure completed.")
++        }
++        mapOf(
++          "ok" to true,
++          "requestedSeconds" to 30,
++          "actualDurationMs" to actualDurationMs,
++          "stoppedEarly" to false,
++        )
++      }.get(75L, TimeUnit.SECONDS)
++    } catch (error: Throwable) {
++      val cause = error.cause ?: error
++      if (scalarTransport === activeScalar) updateState("ready", "Standard 30-second exposure failed.")
++      throw cause
++    } finally {
++      captureInProgress.set(false)
 +    }
 +  }
 +
 +  fun cancelBulbCapture(): Map<String, Any?> {
-+    val active = bulbCapturing.get()
++    val active = captureInProgress.get()
 +    if (active) {
 +      bulbStopRequested.set(true)
 +      trace("BULB stop requested by application")
@@ -103,7 +136,7 @@ index 18b5959..2a06729 100644
    fun focusAtBlocking(x: Double, y: Double, viewWidth: Double, viewHeight: Double): Map<String, Any?> {
      val activeScalar = scalarTransport
        ?: return mapOf("status" to "unsupported", "reason" to "camera_unavailable")
-@@ -523,6 +601,7 @@ internal class SonyCameraController(private val context: Context) {
+@@ -523,6 +634,7 @@ internal class SonyCameraController(private val context: Context) {
    }
  
    fun disconnectBlocking(preserveLiveViewRequest: Boolean = false): Map<String, Any?> {
@@ -112,7 +145,7 @@ index 18b5959..2a06729 100644
      lastFrameJpeg = null
      val old = transport
 diff --git a/node_modules/expo-sony-camera/android/src/main/java/expo/modules/sonycamera/SonyCameraModule.kt b/node_modules/expo-sony-camera/android/src/main/java/expo/modules/sonycamera/SonyCameraModule.kt
-index 015b9a8..96181cc 100644
+index 015b9a8..3f00988 100644
 --- a/node_modules/expo-sony-camera/android/src/main/java/expo/modules/sonycamera/SonyCameraModule.kt
 +++ b/node_modules/expo-sony-camera/android/src/main/java/expo/modules/sonycamera/SonyCameraModule.kt
 @@ -1,16 +1,92 @@
@@ -217,7 +250,7 @@ index 015b9a8..96181cc 100644
        if (SonyCameraRegistry.controller === controller) SonyCameraRegistry.controller = null
      }
  
-@@ -45,9 +122,62 @@ class SonyCameraModule : Module(), SonyCameraController.Listener {
+@@ -45,9 +122,75 @@ class SonyCameraModule : Module(), SonyCameraController.Listener {
      AsyncFunction("stopLiveView") { controller.stopLiveView(); controller.statePayload() }
      AsyncFunction("capturePhoto") { controller.capturePhotoBlocking() }
      AsyncFunction("capturePreviewFrame") { controller.capturePreviewFrameBlocking() }
@@ -229,6 +262,19 @@ index 015b9a8..96181cc 100644
 +      }
 +      try {
 +        controller.captureBulbBlocking(exposureSeconds, iso)
++      } finally {
++        activity?.runOnUiThread {
++          activity.window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
++        }
++      }
++    }
++    AsyncFunction("captureThirtySecond") { iso: String ->
++      val activity = appContext.currentActivity
++      activity?.runOnUiThread {
++        activity.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
++      }
++      try {
++        controller.captureThirtySecondBlocking(iso)
 +      } finally {
 +        activity?.runOnUiThread {
 +          activity.window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -280,7 +326,7 @@ index 015b9a8..96181cc 100644
  
      View(SonyCameraView::class) {
        Prop("active") { view: SonyCameraView, active: Boolean -> view.setActive(active) }
-@@ -67,7 +197,555 @@ class SonyCameraModule : Module(), SonyCameraController.Listener {
+@@ -67,7 +210,555 @@ class SonyCameraModule : Module(), SonyCameraController.Listener {
      sendEvent("onPhotoCaptured", payload)
    }
  
@@ -922,7 +968,7 @@ index 80dc3a8..facb6c3 100644
    }
  
 diff --git a/node_modules/expo-sony-camera/android/src/main/java/expo/modules/sonycamera/SonyScalarWebApiTransport.kt b/node_modules/expo-sony-camera/android/src/main/java/expo/modules/sonycamera/SonyScalarWebApiTransport.kt
-index e97326d..847574e 100644
+index e97326d..051b2e9 100644
 --- a/node_modules/expo-sony-camera/android/src/main/java/expo/modules/sonycamera/SonyScalarWebApiTransport.kt
 +++ b/node_modules/expo-sony-camera/android/src/main/java/expo/modules/sonycamera/SonyScalarWebApiTransport.kt
 @@ -48,15 +48,25 @@ internal class SonyScalarWebApiTransport private constructor(
@@ -1013,7 +1059,7 @@ index e97326d..847574e 100644
    }
  
    private fun refreshAvailableApis() {
-@@ -165,6 +201,41 @@ internal class SonyScalarWebApiTransport private constructor(
+@@ -165,6 +201,62 @@ internal class SonyScalarWebApiTransport private constructor(
  
    fun supportsTouchFocus(): Boolean = availableApis.contains("setTouchAFPosition")
  
@@ -1042,6 +1088,10 @@ index e97326d..847574e 100644
 +    }
 +    call("setIsoSpeedRate", JSONArray().put(iso))
 +    trace("Scalar ISO set to $iso")
++    if (availableApis.contains("setShutterSpeed")) {
++      call("setShutterSpeed", JSONArray().put("BULB"))
++      trace("Scalar shutter speed set to BULB")
++    }
 +    call("startBulbShooting")
 +    trace("Scalar BULB shutter opened")
 +  }
@@ -1052,10 +1102,27 @@ index e97326d..847574e 100644
 +    trace("Scalar BULB shutter closed")
 +  }
 +
++  fun captureThirtySecondPhoto(iso: String): Long {
++    if (!availableApis.contains("actTakePicture")) {
++      throw SonyPtpException("This Sony mode does not expose remote still capture.")
++    }
++    if (!availableApis.contains("setIsoSpeedRate") || !availableApis.contains("setShutterSpeed")) {
++      throw SonyPtpException("This Sony mode cannot configure ISO and a 30-second shutter speed.")
++    }
++    call("setIsoSpeedRate", JSONArray().put(iso))
++    call("setShutterSpeed", JSONArray().put("30\""))
++    trace("Scalar standard exposure configured ISO=$iso shutter=30s")
++    val startedAt = System.currentTimeMillis()
++    // The returned post-view URL is deliberately ignored: the RAW remains on the camera card.
++    call("actTakePicture", timeoutMs = 50_000)
++    trace("Scalar standard 30-second exposure completed")
++    return System.currentTimeMillis() - startedAt
++  }
++
    fun focusAt(x: Double, y: Double): String {
      if (!supportsTouchFocus()) return "unsupported"
      call("setTouchAFPosition", JSONArray().put(x * 100.0).put(y * 100.0))
-@@ -177,12 +248,35 @@ internal class SonyScalarWebApiTransport private constructor(
+@@ -177,12 +269,35 @@ internal class SonyScalarWebApiTransport private constructor(
  
    fun startLiveView() {
      closeLiveStream()
@@ -1186,7 +1253,7 @@ index 1858ee5..db4e3eb 100644
  export type SonyCameraViewProps = {
      active?: boolean;
 diff --git a/node_modules/expo-sony-camera/build/SonyCameraModule.d.ts b/node_modules/expo-sony-camera/build/SonyCameraModule.d.ts
-index 6e395a0..d190d09 100644
+index 6e395a0..5f291e7 100644
 --- a/node_modules/expo-sony-camera/build/SonyCameraModule.d.ts
 +++ b/node_modules/expo-sony-camera/build/SonyCameraModule.d.ts
 @@ -1,5 +1,5 @@
@@ -1196,7 +1263,7 @@ index 6e395a0..d190d09 100644
  declare class SonyCameraNativeModule extends NativeModule<SonyCameraModuleEvents> {
      getState(): SonyCameraState;
      connect(options?: SonyConnectOptions): Promise<SonyCameraState>;
-@@ -14,8 +14,22 @@ declare class SonyCameraNativeModule extends NativeModule<SonyCameraModuleEvents
+@@ -14,8 +14,24 @@ declare class SonyCameraNativeModule extends NativeModule<SonyCameraModuleEvents
       * has arrived yet. It does not emit `onPhotoCaptured`.
       */
      capturePreviewFrame(): Promise<SonyPhoto>;
@@ -1204,6 +1271,8 @@ index 6e395a0..d190d09 100644
 +    getIsoSpeedRates(): Promise<SonyIsoSpeedRates>;
 +    /** Run one timed BULB exposure. Live View must be stopped first. */
 +    captureBulb(exposureSeconds: number, iso: string): Promise<SonyBulbCaptureResult>;
++    /** Run one camera-timed 30-second exposure, preserving 14-bit RAW on compatible bodies. */
++    captureThirtySecond(iso: string): Promise<SonyBulbCaptureResult>;
 +    /** Ask an active timed BULB exposure to close its shutter early. */
 +    cancelBulbCapture(): {
 +        ok: boolean;
@@ -1315,7 +1384,7 @@ index b125ec2..af7af6a 100644
  
  export type SonyCameraViewProps = {
 diff --git a/node_modules/expo-sony-camera/src/SonyCameraModule.ts b/node_modules/expo-sony-camera/src/SonyCameraModule.ts
-index 48a3309..c01ea95 100644
+index 48a3309..0eaeef6 100644
 --- a/node_modules/expo-sony-camera/src/SonyCameraModule.ts
 +++ b/node_modules/expo-sony-camera/src/SonyCameraModule.ts
 @@ -5,6 +5,8 @@ import type {
@@ -1327,7 +1396,7 @@ index 48a3309..c01ea95 100644
    SonyCameraState,
    SonyPhoto,
  } from './SonyCamera.types';
-@@ -23,8 +25,19 @@ declare class SonyCameraNativeModule extends NativeModule<SonyCameraModuleEvents
+@@ -23,8 +25,21 @@ declare class SonyCameraNativeModule extends NativeModule<SonyCameraModuleEvents
     * has arrived yet. It does not emit `onPhotoCaptured`.
     */
    capturePreviewFrame(): Promise<SonyPhoto>;
@@ -1335,6 +1404,8 @@ index 48a3309..c01ea95 100644
 +  getIsoSpeedRates(): Promise<SonyIsoSpeedRates>;
 +  /** Run one timed BULB exposure. Live View must be stopped first. */
 +  captureBulb(exposureSeconds: number, iso: string): Promise<SonyBulbCaptureResult>;
++  /** Run one camera-timed 30-second exposure, preserving 14-bit RAW on compatible bodies. */
++  captureThirtySecond(iso: string): Promise<SonyBulbCaptureResult>;
 +  /** Ask an active timed BULB exposure to close its shutter early. */
 +  cancelBulbCapture(): { ok: boolean; active: boolean };
    /** Android only, and only when the active ScalarWebAPI camera advertises coordinate focus. */
