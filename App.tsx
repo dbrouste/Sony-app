@@ -4,6 +4,7 @@ import * as Updates from 'expo-updates';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import PolarAlignmentScreen from './PolarAlignmentScreen';
 import CaptureAssistantScreen from './CaptureAssistantScreen';
+import PlateSolvingScreen from './PlateSolvingScreen';
 import {
   ActivityIndicator,
   PanResponder,
@@ -398,7 +399,7 @@ function ActionButton({
 
 export default function App() {
   const camera = SonyCamera;
-  const [activeScreen, setActiveScreen] = useState<'camera' | 'polar' | 'capture'>('camera');
+  const [activeScreen, setActiveScreen] = useState<'camera' | 'polar' | 'capture' | 'plate'>('camera');
   const [cameraState, setCameraState] = useState<SonyCameraState | null>(() =>
     camera ? camera.getState() : null
   );
@@ -1001,6 +1002,16 @@ export default function App() {
     return <CaptureAssistantScreen camera={camera} onClose={() => setActiveScreen('camera')} />;
   }
 
+  if (activeScreen === 'plate' && camera) {
+    return (
+      <PlateSolvingScreen
+        camera={camera}
+        streaming={streaming}
+        onClose={() => setActiveScreen('camera')}
+      />
+    );
+  }
+
   if (!camera) {
     return (
       <SafeAreaView style={styles.centeredPage}>
@@ -1451,6 +1462,11 @@ export default function App() {
             <ActionButton
               title="Assistant prise de vue"
               onPress={() => setActiveScreen('capture')}
+              disabled={busy || !connected}
+            />
+            <ActionButton
+              title="Plate solving hors ligne"
+              onPress={() => setActiveScreen('plate')}
               disabled={busy || !connected}
             />
             <ActionButton
