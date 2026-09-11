@@ -7,7 +7,8 @@
     "start": "expo start",
     "typecheck": "tsc --noEmit",
     "postinstall": "patch-package",
-    "build:apk": "npx eas-cli build --platform android --profile preview"
+    "build:apk": "npx eas-cli build --platform android --profile preview",
+    "build:local": "build-local.bat"
   },
   "dependencies": {
     "expo": "~57.0.20",
