@@ -1,8 +1,6 @@
 @echo off
 setlocal
 
-set NODE_ENV=production
-
 cd /d "%~dp0"
 
 echo [local-build] Stopping Gradle daemon if present...
@@ -30,8 +28,14 @@ if exist "node_modules\expo-sony-camera" (
 )
 
 echo [local-build] Installing dependencies...
+rem Keep NODE_ENV unset here so npm installs devDependencies such as patch-package.
+set NODE_ENV=
 call npm install
 if errorlevel 1 goto :fail
+
+rem Expo/Gradle release tasks expect production mode, but only after dependencies
+rem (including devDependencies used by postinstall) have been installed.
+set NODE_ENV=production
 
 echo [local-build] Generating Android project...
 call npx expo prebuild --platform android --no-install
