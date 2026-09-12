@@ -1,6 +1,8 @@
 @echo off
 setlocal
 
+set NODE_ENV=production
+
 cd /d "%~dp0"
 
 echo [local-build] Stopping Gradle daemon if present...
