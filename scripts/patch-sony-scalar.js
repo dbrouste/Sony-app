@@ -22,21 +22,41 @@ if (!fs.existsSync(target)) {
 
 let source = fs.readFileSync(target, 'utf8');
 
-function replaceRegex(label, regex, replacement) {
+function replaceBetween(label, startToken, endToken, replacement, alreadyPatchedMarker) {
+  if (alreadyPatchedMarker && source.includes(alreadyPatchedMarker)) {
+    console.log(`[postinstall] ${label}: already patched.`);
+    return;
+  }
+  const start = source.indexOf(startToken);
+  if (start < 0) {
+    throw new Error(`Unable to patch ${label}: start token was not found.`);
+  }
+  const end = source.indexOf(endToken, start + startToken.length);
+  if (end < 0) {
+    throw new Error(`Unable to patch ${label}: end token was not found.`);
+  }
+  source = source.slice(0, start) + replacement + source.slice(end);
+}
+
+function replaceRegex(label, regex, replacement, alreadyPatchedMarker) {
+  if (alreadyPatchedMarker && source.includes(alreadyPatchedMarker)) {
+    console.log(`[postinstall] ${label}: already patched.`);
+    return;
+  }
   if (!regex.test(source)) {
     throw new Error(`Unable to patch ${label}: expected source pattern was not found.`);
   }
   source = source.replace(regex, replacement);
 }
 
-replaceRegex(
+replaceBetween(
   'Scalar connection handshake',
-  /  fun connect\(\) \{[\s\S]*?\n  \}\n\n  private fun refreshAvailableApis\(\) \{/,
+  '  fun connect() {',
+  '  private fun refreshAvailableApis() {',
   `  fun connect() {
     // A7R II legacy ScalarWebAPI initialization sequence proven by ESP32-Lidar:
-    // getVersions -> startRecMode -> startLiveview.  Do not gate these first two
-    // commands on getAvailableApiList: this body can execute commands that it does
-    // not advertise until Remote Shooting is active.
+    // getVersions -> startRecMode. Live View is started by startLiveView() immediately
+    // afterwards when requested by the app. Do not gate these commands on the API list.
     trace("Scalar handshake: getVersions")
     call("getVersions")
 
@@ -50,12 +70,14 @@ replaceRegex(
     trace("Scalar API list=\${availableApis.sorted().joinToString(",")}")
   }
 
-  private fun refreshAvailableApis() {`
+`,
+  'Scalar handshake: getVersions'
 );
 
-replaceRegex(
+replaceBetween(
   'ISO discovery',
-  /  fun isoSpeedRates\(\): Map<String, Any\?> \{[\s\S]*?\n  \}\n\n  fun configureCaptureSettings/,
+  '  fun isoSpeedRates(): Map<String, Any?> {',
+  '  fun configureCaptureSettings',
   `  fun isoSpeedRates(): Map<String, Any?> {
     // Legacy A7 bodies may omit these methods from getAvailableApiList even though
     // direct ScalarWebAPI calls work. Try the current/available query first, then
@@ -85,12 +107,14 @@ replaceRegex(
     return mapOf("current" to current, "available" to available)
   }
 
-  fun configureCaptureSettings`
+`,
+  'trying getSupportedIsoSpeedRate'
 );
 
-replaceRegex(
+replaceBetween(
   'direct ISO/shutter control',
-  /  fun configureCaptureSettings\(shutterSpeed: String, iso: String\): Map<String, Any\?> \{[\s\S]*?\n  \}\n\n  fun startBulbShooting/,
+  '  fun configureCaptureSettings(shutterSpeed: String, iso: String): Map<String, Any?> {',
+  '  fun startBulbShooting',
   `  fun configureCaptureSettings(shutterSpeed: String, iso: String): Map<String, Any?> {
     // Match the proven ESP32-Lidar behavior: send these methods directly instead
     // of rejecting them because getAvailableApiList omitted them.
@@ -103,12 +127,13 @@ replaceRegex(
       .getOrElse { mapOf("current" to iso, "available" to emptyList<String>()) }
   }
 
-  fun startBulbShooting`
+`,
+  'Match the proven ESP32-Lidar behavior'
 );
 
 replaceRegex(
   'ISO discovery after Live View start',
-  /(    val activeLiveViewUrl = response[\s\S]*?      \?: throw SonyPtpException\([\s\S]*?\n      \)\n)(    val connection = network\.open\(activeLiveViewUrl\)\.apply \{)/,
+  /(    val activeLiveViewUrl = response[\s\S]*?      \?: throw SonyPtpException\([\s\S]*?\r?\n      \)\r?\n)(    val connection = network\.open\(activeLiveViewUrl\)\.apply \{)/,
   `$1    // The A7R II exposes its shooting controls reliably after startLiveview.
     // Refresh capabilities and query ISO here so the JS UI can read the list later
     // without racing the Remote Shooting / Live View state transition.
@@ -118,7 +143,8 @@ replaceRegex(
     }.onFailure { error ->
       trace("Scalar ISO discovery after Live View start failed: \${error.message ?: "unknown"}")
     }
-$2`
+$2`,
+  'Scalar ISO discovery after Live View start failed'
 );
 
 fs.writeFileSync(target, source, 'utf8');
