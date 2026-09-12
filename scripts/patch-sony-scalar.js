@@ -144,12 +144,30 @@ replaceBetween(
     if (configuredIso != iso || configuredShutterSpeed != "BULB") {
       configureCaptureSettings("BULB", iso)
     }
-    call("startBulbShooting")
-    trace("Scalar BULB shutter opened")
+
+    // After a BULB exposure the A7R II can remain busy while it finalises/writes the RAW.
+    // Retry startBulbShooting for up to ~10 s instead of failing the whole timelapse.
+    val deadline = System.currentTimeMillis() + 10_000L
+    var attempt = 0
+    while (true) {
+      attempt += 1
+      try {
+        call("startBulbShooting")
+        trace("Scalar BULB shutter opened attempt=$attempt")
+        break
+      } catch (error: SonyPtpException) {
+        val busy = error.message?.contains("Not Available Now", ignoreCase = true) == true
+        if (!busy || System.currentTimeMillis() >= deadline) throw error
+        trace("Scalar startBulbShooting busy attempt=$attempt; waiting before retry")
+        runCatching { call("getEvent", JSONArray().put(false), timeoutMs = 2_000) }
+          .onFailure { trace("Scalar readiness getEvent failed during BULB retry: \${it.message ?: "unknown"}") }
+        Thread.sleep(400)
+      }
+    }
   }
 
 `,
-  'ISO/BULB are configured once before the sequence'
+  'Retry startBulbShooting for up to ~10 s'
 );
 
 replaceBetween(
