@@ -945,13 +945,23 @@ export default function App() {
   }
 
   async function checkForAppUpdate() {
+    const updateNetwork = camera;
+    if (!updateNetwork) {
+      setUpdateMessage('Le module réseau natif n’est pas disponible dans cette installation.');
+      return;
+    }
     if (!Updates.isEnabled) {
       setUpdateMessage('EAS Update est désactivé dans cette installation.');
       return;
     }
     setCheckingUpdate(true);
-    setUpdateMessage('Recherche d’une mise à jour…');
+    setUpdateMessage('Recherche d’un réseau avec Internet…');
     try {
+      const route = await updateNetwork.useInternetRoute();
+      if (!route.ok) {
+        throw new Error('Aucun réseau avec accès Internet n’est disponible. Active les données mobiles ou connecte un Wi-Fi Internet.');
+      }
+      setUpdateMessage('Connexion Internet trouvée · recherche d’une mise à jour…');
       const result = await Updates.checkForUpdateAsync();
       if (!result.isAvailable) {
         setUpdateMessage('Cette application utilise déjà la dernière mise à jour compatible.');
@@ -963,9 +973,10 @@ export default function App() {
       await Updates.reloadAsync();
     } catch (error) {
       setUpdateMessage(
-        `Échec de la mise à jour : ${errorMessage(error)}. Utilise un Wi-Fi avec Internet, pas celui du Sony.`
+        `Échec de la mise à jour : ${errorMessage(error)}`
       );
     } finally {
+      updateNetwork.restoreDefaultRoute();
       setCheckingUpdate(false);
     }
   }

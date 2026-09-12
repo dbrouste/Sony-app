@@ -29,6 +29,7 @@ type CameraClient = {
   startLiveView(): Promise<SonyCameraState>;
   stopLiveView(): Promise<SonyCameraState>;
   getIsoSpeedRates(): Promise<SonyIsoSpeedRates>;
+  configureCaptureSettings(shutterSpeed: '30"' | 'BULB', iso: string): Promise<SonyIsoSpeedRates>;
   captureBulb(exposureSeconds: number, iso: string): Promise<SonyBulbCaptureResult>;
   captureThirtySecond(iso: string): Promise<SonyBulbCaptureResult>;
   cancelBulbCapture(): { ok: boolean; active: boolean };
@@ -139,7 +140,7 @@ export default function CaptureAssistantScreen({
   const [exposureType, setExposureType] = useState<ExposureType>('standard30');
   const [isoValues, setIsoValues] = useState(FALLBACK_ISO);
   const [selectedIso, setSelectedIso] = useState('800');
-  const [remoteIsoAvailable, setRemoteIsoAvailable] = useState<boolean | null>(null);
+  const [settingsPending, setSettingsPending] = useState(false);
   const [mode, setMode] = useState<CaptureMode>('idle');
   const [photoCount, setPhotoCount] = useState(0);
   const [exposureEndsAt, setExposureEndsAt] = useState<number | null>(null);
@@ -156,7 +157,6 @@ export default function CaptureAssistantScreen({
       .getIsoSpeedRates()
       .then((settings) => {
         if (!mounted) return;
-        setRemoteIsoAvailable(true);
         const values = settings.available
           .filter((value) => value !== 'AUTO' && /^\d+$/.test(value))
           .sort((left, right) => Number(left) - Number(right));
@@ -164,11 +164,10 @@ export default function CaptureAssistantScreen({
         if (settings.current && settings.current !== 'AUTO' && values.includes(settings.current)) {
           setSelectedIso(settings.current);
         }
+        setStatus('Réglages ISO chargés depuis le boîtier.');
       })
       .catch((error) => {
-        if (!mounted) return;
-        setRemoteIsoAvailable(false);
-        setStatus(`Réglage ISO à faire sur le boîtier · ${errorMessage(error)}`);
+        if (mounted) setStatus(`Valeurs ISO standards affichées · lecture Sony impossible : ${errorMessage(error)}`);
       });
     return () => {
       mounted = false;
@@ -176,6 +175,30 @@ export default function CaptureAssistantScreen({
       camera.cancelBulbCapture();
     };
   }, [camera]);
+
+  async function applyCameraSettings(nextType: ExposureType, nextIso: string) {
+    setSettingsPending(true);
+    setLastError(null);
+    setStatus('Mise à jour des réglages sur le boîtier…');
+    try {
+      const settings = await camera.configureCaptureSettings(
+        nextType === 'standard30' ? '30"' : 'BULB',
+        nextIso
+      );
+      const values = settings.available
+        .filter((value) => value !== 'AUTO' && /^\d+$/.test(value))
+        .sort((left, right) => Number(left) - Number(right));
+      if (values.length > 0) setIsoValues(values);
+      setExposureType(nextType);
+      setSelectedIso(settings.current && settings.current !== 'AUTO' ? settings.current : nextIso);
+      setStatus(`Boîtier réglé sur ${nextType === 'standard30' ? '30 s' : 'BULB'} · ISO ${nextIso}.`);
+    } catch (error) {
+      setLastError(errorMessage(error));
+      setStatus('Le boîtier a refusé la mise à jour des réglages.');
+    } finally {
+      setSettingsPending(false);
+    }
+  }
 
   useEffect(() => {
     if (exposureEndsAt === null) {
@@ -216,12 +239,8 @@ export default function CaptureAssistantScreen({
     setExposureEndsAt(Date.now() + duration * 1_000);
     setStatus(
       exposureType === 'standard30'
-        ? remoteIsoAvailable === false
-          ? 'Pose standard · réglages 30 s et ISO conservés sur le boîtier'
-          : `Pose standard 30 s · RAW 14 bits · ISO ${selectedIso}`
-        : remoteIsoAvailable === false
-          ? 'Pose BULB · ISO conservé sur le boîtier'
-          : `Pose BULB · RAW 12 bits · ISO ${selectedIso}`
+        ? `Pose standard 30 s · RAW 14 bits · ISO ${selectedIso}`
+        : `Pose BULB · RAW 12 bits · ISO ${selectedIso}`
     );
     try {
       return exposureType === 'standard30'
@@ -304,7 +323,7 @@ export default function CaptureAssistantScreen({
             <Text style={styles.title}>Prise de vue</Text>
             <Text style={styles.subtitle}>Sony A7R II · RAW 14 bits ou BULB</Text>
           </View>
-          <Button title="Retour" onPress={onClose} disabled={active} />
+          <Button title="Retour" onPress={onClose} disabled={active || settingsPending} />
         </View>
 
         <View style={styles.panel}>
@@ -312,26 +331,26 @@ export default function CaptureAssistantScreen({
           <View style={styles.modeRow}>
             <Pressable
               accessibilityRole="button"
-              disabled={active}
-              onPress={() => setExposureType('standard30')}
+              disabled={active || settingsPending}
+              onPress={() => void applyCameraSettings('standard30', selectedIso)}
               style={({ pressed }) => [
                 styles.modeButton,
                 exposureType === 'standard30' && styles.modeButtonSelected,
-                active && styles.disabled,
-                pressed && !active && styles.buttonPressed,
+                (active || settingsPending) && styles.disabled,
+                pressed && !active && !settingsPending && styles.buttonPressed,
               ]}>
               <Text style={styles.modeTitle}>30 s standard</Text>
               <Text style={styles.modeDetail}>RAW 14 bits</Text>
             </Pressable>
             <Pressable
               accessibilityRole="button"
-              disabled={active}
-              onPress={() => setExposureType('bulb')}
+              disabled={active || settingsPending}
+              onPress={() => void applyCameraSettings('bulb', selectedIso)}
               style={({ pressed }) => [
                 styles.modeButton,
                 exposureType === 'bulb' && styles.modeButtonSelected,
-                active && styles.disabled,
-                pressed && !active && styles.buttonPressed,
+                (active || settingsPending) && styles.disabled,
+                pressed && !active && !settingsPending && styles.buttonPressed,
               ]}>
               <Text style={styles.modeTitle}>BULB</Text>
               <Text style={styles.modeDetail}>5–300 s · RAW 12 bits</Text>
@@ -343,7 +362,7 @@ export default function CaptureAssistantScreen({
           <View style={styles.panel}>
             <Text style={styles.label}>Temps de pose BULB</Text>
             <Text style={styles.exposureValue}>{formatDuration(exposureSeconds)}</Text>
-            <ExposureSlider value={exposureSeconds} onChange={setExposureSeconds} disabled={active} />
+            <ExposureSlider value={exposureSeconds} onChange={setExposureSeconds} disabled={active || settingsPending} />
             <View style={styles.rangeRow}>
               <Text style={styles.hint}>5 s</Text>
               <Text style={styles.hint}>Pas de 5 s</Text>
@@ -361,23 +380,18 @@ export default function CaptureAssistantScreen({
 
         <View style={styles.panel}>
           <Text style={styles.label}>ISO</Text>
-          {remoteIsoAvailable === false ? (
-            <Text style={styles.manualSetting}>
-              Régle l’ISO sur le boîtier : ce mode Sony ne permet pas de le modifier à distance.
-            </Text>
-          ) : null}
           <View style={styles.isoGrid}>
             {isoValues.map((iso) => (
               <Pressable
                 key={iso}
                 accessibilityRole="button"
-                disabled={active || remoteIsoAvailable === false}
-                onPress={() => setSelectedIso(iso)}
+                disabled={active || settingsPending}
+                onPress={() => void applyCameraSettings(exposureType, iso)}
                 style={({ pressed }) => [
                   styles.isoButton,
                   selectedIso === iso && styles.isoButtonSelected,
-                  active && styles.disabled,
-                  pressed && !active && styles.buttonPressed,
+                  (active || settingsPending) && styles.disabled,
+                  pressed && !active && !settingsPending && styles.buttonPressed,
                 ]}>
                 <Text style={[styles.isoText, selectedIso === iso && styles.isoTextSelected]}>{iso}</Text>
               </Pressable>
@@ -386,7 +400,7 @@ export default function CaptureAssistantScreen({
         </View>
 
         <View style={styles.statusPanel}>
-          {active ? <ActivityIndicator color="#f4c95d" size="large" /> : null}
+          {active || settingsPending ? <ActivityIndicator color="#f4c95d" size="large" /> : null}
           <Text style={styles.status}>{status}</Text>
           {exposureEndsAt !== null ? (
             <Text style={styles.countdown}>{formatDuration(remainingSeconds)} restantes</Text>
@@ -411,14 +425,14 @@ export default function CaptureAssistantScreen({
             />
           ) : (
             <>
-              <Button title="Prendre une photo" onPress={() => void runSingle()} />
-              <Button title="Démarrer le timelapse" onPress={() => void runTimelapse()} />
+              <Button title="Prendre une photo" onPress={() => void runSingle()} disabled={settingsPending} />
+              <Button title="Démarrer le timelapse" onPress={() => void runTimelapse()} disabled={settingsPending} />
             </>
           )}
         </View>
 
         <Text style={styles.footer}>
-          Le timelapse attend 1 seconde après la fin de chaque pose. L’écran reste actif pendant la pose. Si les réglages distants sont indisponibles, règle 30 s ou BULB et l’ISO sur le boîtier. Utilise le mode 30 s standard pour le RAW 14 bits et BULB pour les poses longues en 12 bits. La réduction de bruit longue pose doit être désactivée.
+          Le timelapse attend 1 seconde après la fin de chaque pose. L’écran reste actif pendant la pose. Utilise le mode 30 s standard pour le RAW 14 bits et BULB pour les poses longues en 12 bits. La réduction de bruit longue pose doit être désactivée.
         </Text>
       </ScrollView>
     </SafeAreaView>
@@ -452,7 +466,6 @@ const styles = StyleSheet.create({
   isoButtonSelected: { borderColor: '#f4c95d', backgroundColor: '#4c4020' },
   isoText: { color: '#bdc7d5', fontSize: 15, fontWeight: '700' },
   isoTextSelected: { color: '#fff4c7' },
-  manualSetting: { color: '#f4c95d', fontSize: 13, lineHeight: 19, marginTop: 10 },
   statusPanel: { alignItems: 'center', gap: 9, padding: 20, borderRadius: 16, backgroundColor: '#0e141e' },
   status: { color: '#d9e1ec', fontSize: 16, textAlign: 'center' },
   countdown: { color: '#f4c95d', fontSize: 28, fontWeight: '900' },
