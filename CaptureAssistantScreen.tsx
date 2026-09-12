@@ -29,7 +29,7 @@ type CameraClient = {
   startLiveView(): Promise<SonyCameraState>;
   stopLiveView(): Promise<SonyCameraState>;
   getIsoSpeedRates(): Promise<SonyIsoSpeedRates>;
-  configureCaptureSettings(shutterSpeed: '30"' | 'BULB', iso: string): Promise<SonyIsoSpeedRates>;
+  configureCaptureSettings?(shutterSpeed: '30"' | 'BULB', iso: string): Promise<SonyIsoSpeedRates>;
   captureBulb(exposureSeconds: number, iso: string): Promise<SonyBulbCaptureResult>;
   captureThirtySecond(iso: string): Promise<SonyBulbCaptureResult>;
   cancelBulbCapture(): { ok: boolean; active: boolean };
@@ -181,6 +181,9 @@ export default function CaptureAssistantScreen({
     setLastError(null);
     setStatus('Mise à jour des réglages sur le boîtier…');
     try {
+      if (typeof camera.configureCaptureSettings !== 'function') {
+        throw new Error('APK natif trop ancien. Installe la version 0.2.2 recompilée.');
+      }
       const settings = await camera.configureCaptureSettings(
         nextType === 'standard30' ? '30"' : 'BULB',
         nextIso

@@ -2,7 +2,7 @@
   "expo": {
     "name": "A7R II Live View Test",
     "slug": "a7rii-liveview-test",
-    "version": "0.2.1",
+    "version": "0.2.2",
     "orientation": "landscape",
     "android": {
       "package": "com.dbrouste.a7riiliveviewtest",

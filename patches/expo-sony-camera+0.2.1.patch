@@ -1357,7 +1357,7 @@ index 1858ee5..db4e3eb 100644
  export type SonyCameraViewProps = {
      active?: boolean;
 diff --git a/node_modules/expo-sony-camera/build/SonyCameraModule.d.ts b/node_modules/expo-sony-camera/build/SonyCameraModule.d.ts
-index 6e395a0..39c2ae4 100644
+index 6e395a0..b4dd7ea 100644
 --- a/node_modules/expo-sony-camera/build/SonyCameraModule.d.ts
 +++ b/node_modules/expo-sony-camera/build/SonyCameraModule.d.ts
 @@ -1,5 +1,5 @@
@@ -1374,11 +1374,11 @@ index 6e395a0..39c2ae4 100644
 +    /** Read the ISO values advertised by the active Sony ScalarWebAPI session. */
 +    getIsoSpeedRates(): Promise<SonyIsoSpeedRates>;
 +    /** Apply the requested ISO and 30-second or BULB shutter mode immediately. */
-+    configureCaptureSettings(shutterSpeed: '30"' | 'BULB', iso: string): Promise<SonyIsoSpeedRates>;
++    configureCaptureSettings?(shutterSpeed: '30"' | 'BULB', iso: string): Promise<SonyIsoSpeedRates>;
 +    /** Temporarily route process traffic through an Internet-capable network. */
-+    useInternetRoute(): Promise<{ ok: boolean }>;
++    useInternetRoute?(): Promise<{ ok: boolean }>;
 +    /** Restore Android's normal process network selection. */
-+    restoreDefaultRoute(): { ok: boolean };
++    restoreDefaultRoute?(): { ok: boolean };
 +    /** Run one timed BULB exposure. Live View must be stopped first. */
 +    captureBulb(exposureSeconds: number, iso: string): Promise<SonyBulbCaptureResult>;
 +    /** Run one camera-timed 30-second exposure, preserving 14-bit RAW on compatible bodies. */
@@ -1494,7 +1494,7 @@ index b125ec2..af7af6a 100644
  
  export type SonyCameraViewProps = {
 diff --git a/node_modules/expo-sony-camera/src/SonyCameraModule.ts b/node_modules/expo-sony-camera/src/SonyCameraModule.ts
-index 48a3309..14f4e89 100644
+index 48a3309..eaa2860 100644
 --- a/node_modules/expo-sony-camera/src/SonyCameraModule.ts
 +++ b/node_modules/expo-sony-camera/src/SonyCameraModule.ts
 @@ -5,6 +5,8 @@ import type {
@@ -1513,11 +1513,11 @@ index 48a3309..14f4e89 100644
 +  /** Read the ISO values advertised by the active Sony ScalarWebAPI session. */
 +  getIsoSpeedRates(): Promise<SonyIsoSpeedRates>;
 +  /** Apply the requested ISO and 30-second or BULB shutter mode immediately. */
-+  configureCaptureSettings(shutterSpeed: '30"' | 'BULB', iso: string): Promise<SonyIsoSpeedRates>;
++  configureCaptureSettings?(shutterSpeed: '30"' | 'BULB', iso: string): Promise<SonyIsoSpeedRates>;
 +  /** Temporarily route process traffic through an Internet-capable network. */
-+  useInternetRoute(): Promise<{ ok: boolean }>;
++  useInternetRoute?(): Promise<{ ok: boolean }>;
 +  /** Restore Android's normal process network selection. */
-+  restoreDefaultRoute(): { ok: boolean };
++  restoreDefaultRoute?(): { ok: boolean };
 +  /** Run one timed BULB exposure. Live View must be stopped first. */
 +  captureBulb(exposureSeconds: number, iso: string): Promise<SonyBulbCaptureResult>;
 +  /** Run one camera-timed 30-second exposure, preserving 14-bit RAW on compatible bodies. */

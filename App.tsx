@@ -956,10 +956,14 @@ export default function App() {
     }
     setCheckingUpdate(true);
     setUpdateMessage('Recherche d’un réseau avec Internet…');
+    let temporaryRoute = false;
     try {
-      const route = await updateNetwork.useInternetRoute();
-      if (!route.ok) {
-        throw new Error('Aucun réseau avec accès Internet n’est disponible. Active les données mobiles ou connecte un Wi-Fi Internet.');
+      if (typeof updateNetwork.useInternetRoute === 'function') {
+        const route = await updateNetwork.useInternetRoute();
+        if (!route.ok) {
+          throw new Error('Aucun réseau avec accès Internet n’est disponible. Active les données mobiles ou connecte un Wi-Fi Internet.');
+        }
+        temporaryRoute = true;
       }
       setUpdateMessage('Connexion Internet trouvée · recherche d’une mise à jour…');
       const result = await Updates.checkForUpdateAsync();
@@ -976,7 +980,9 @@ export default function App() {
         `Échec de la mise à jour : ${errorMessage(error)}`
       );
     } finally {
-      updateNetwork.restoreDefaultRoute();
+      if (temporaryRoute && typeof updateNetwork.restoreDefaultRoute === 'function') {
+        updateNetwork.restoreDefaultRoute();
+      }
       setCheckingUpdate(false);
     }
   }
