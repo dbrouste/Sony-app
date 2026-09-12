@@ -6,7 +6,7 @@
   "scripts": {
     "start": "expo start",
     "typecheck": "tsc --noEmit",
-    "postinstall": "patch-package",
+    "postinstall": "patch-package && node scripts/patch-sony-scalar.js",
     "build:apk": "npx eas-cli build --platform android --profile preview"
   },
   "dependencies": {
