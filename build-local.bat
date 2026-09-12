@@ -14,6 +14,19 @@ echo [local-build] Pulling latest main...
 git pull --ff-only
 if errorlevel 1 goto :fail
 
+rem expo-sony-camera is modified by patch-package. A previous local build or
+rem interrupted npm install can leave a partially patched copy in node_modules,
+rem which makes patch-package fail on the next install. Always restore a clean
+rem package copy before npm runs its postinstall hook.
+if exist "node_modules\expo-sony-camera" (
+  echo [local-build] Resetting expo-sony-camera before patch-package...
+  rmdir /s /q "node_modules\expo-sony-camera"
+  if exist "node_modules\expo-sony-camera" (
+    echo [local-build] Could not remove expo-sony-camera. A Java/Gradle process may still be locking files.
+    goto :fail
+  )
+)
+
 echo [local-build] Installing dependencies...
 call npm install
 if errorlevel 1 goto :fail
