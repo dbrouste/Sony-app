@@ -844,31 +844,32 @@ export default function App() {
     const trackingSubscription = camera.addListener('onStarTracked', (sample) => {
       setTrackingSample(sample);
       if (focusModeRef.current) updateFocusMeasurement(sample);
+      const eventTimestamp = Number.isFinite(sample.timestamp) ? sample.timestamp : Date.now();
       if (sample.locked) {
-        const point = { x: sample.x, y: sample.y, timestamp: sample.timestamp };
+        const point = { x: sample.x, y: sample.y, timestamp: eventTimestamp };
         const previousLockedAt = lastLockedAtRef.current;
-        if (previousLockedAt !== null && sample.timestamp - previousLockedAt > 1500) {
+        if (previousLockedAt !== null && eventTimestamp - previousLockedAt > 1500) {
+          // A long tracking gap invalidates only the rolling display smoother. Keep the
+          // drift/reference bin so a slow native cadence cannot reset acquisition forever.
           temporalSamplesRef.current = [];
-          temporalBinRef.current = [];
-          temporalBinStartedAtRef.current = null;
         }
-        lastLockedAtRef.current = sample.timestamp;
+        lastLockedAtRef.current = eventTimestamp;
 
         // A one-second linear regression smooths the displayed target while predicting
         // the current position, avoiding the lag of a conventional moving average.
         temporalSamplesRef.current = [...temporalSamplesRef.current, point].filter(
-          (entry) => entry.timestamp >= sample.timestamp - 1000
+          (entry) => entry.timestamp >= eventTimestamp - 1000
         );
-        setFilteredTrackingPoint(predictTimedPoint(temporalSamplesRef.current, sample.timestamp));
+        setFilteredTrackingPoint(predictTimedPoint(temporalSamplesRef.current, eventTimestamp));
 
         // Independent one-second bins feed the drift fit, avoiding the overweighting
         // caused by highly correlated rolling-average samples. Even a sparse bin is kept:
         // in real conditions the native tracker can provide only one or two valid samples/s.
         if (temporalBinStartedAtRef.current === null) {
-          temporalBinStartedAtRef.current = sample.timestamp;
+          temporalBinStartedAtRef.current = eventTimestamp;
         }
         temporalBinRef.current.push(point);
-        if (sample.timestamp - temporalBinStartedAtRef.current >= 1000) {
+        if (eventTimestamp - temporalBinStartedAtRef.current >= 1000) {
           const completedBin = temporalBinRef.current;
           if (completedBin.length >= 1) {
             const consolidated = medianTimedPoint(completedBin);
@@ -890,7 +891,7 @@ export default function App() {
         }
       } else if (
         lastLockedAtRef.current !== null &&
-        sample.timestamp - lastLockedAtRef.current > 1000
+        eventTimestamp - lastLockedAtRef.current > 1000
       ) {
         temporalSamplesRef.current = [];
         temporalBinRef.current = [];
