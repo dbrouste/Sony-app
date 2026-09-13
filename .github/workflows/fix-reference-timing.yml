@@ -1,14 +1,12 @@
 name: Fix reference timing
-
-on:
+'on':
   push:
-    branches: [main]
+    branches:
+      - main
     paths:
       - .github/workflows/fix-reference-timing.yml
-
 permissions:
   contents: write
-
 jobs:
   patch:
     runs-on: ubuntu-latest
@@ -21,10 +19,9 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
-
           path = Path('App.tsx')
           text = path.read_text(encoding='utf-8')
-          old = '''    const trackingSubscription = camera.addListener('onStarTracked', (sample) => {
+          old = """    const trackingSubscription = camera.addListener('onStarTracked', (sample) => {
       setTrackingSample(sample);
       if (focusModeRef.current) updateFocusMeasurement(sample);
       if (sample.locked) {
@@ -43,8 +40,8 @@ jobs:
           (entry) => entry.timestamp >= sample.timestamp - 1000
         );
         setFilteredTrackingPoint(predictTimedPoint(temporalSamplesRef.current, sample.timestamp));
-'''
-          new = '''    const trackingSubscription = camera.addListener('onStarTracked', (sample) => {
+"""
+          new = """    const trackingSubscription = camera.addListener('onStarTracked', (sample) => {
       setTrackingSample(sample);
       if (focusModeRef.current) updateFocusMeasurement(sample);
       const eventTimestamp = Number.isFinite(sample.timestamp) ? sample.timestamp : Date.now();
@@ -64,7 +61,7 @@ jobs:
           (entry) => entry.timestamp >= eventTimestamp - 1000
         );
         setFilteredTrackingPoint(predictTimedPoint(temporalSamplesRef.current, eventTimestamp));
-'''
+"""
           if old not in text:
               raise SystemExit('Expected tracking block not found')
           text = text.replace(old, new, 1)
@@ -73,7 +70,6 @@ jobs:
           text = text.replace('        sample.timestamp - lastLockedAtRef.current > 1000', '        eventTimestamp - lastLockedAtRef.current > 1000', 1)
           path.write_text(text, encoding='utf-8')
           PY
-          git rm .github/workflows/fix-reference-timing.yml
       - name: Commit fix
         shell: bash
         run: |
