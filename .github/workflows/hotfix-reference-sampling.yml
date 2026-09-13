@@ -1,5 +1,6 @@
 name: Hotfix reference sampling
 
+# One-shot workflow: patches App.tsx, then removes itself.
 on:
   push:
     branches: [main]
