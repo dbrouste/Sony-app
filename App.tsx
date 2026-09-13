@@ -862,14 +862,15 @@ export default function App() {
         setFilteredTrackingPoint(predictTimedPoint(temporalSamplesRef.current, sample.timestamp));
 
         // Independent one-second bins feed the drift fit, avoiding the overweighting
-        // caused by highly correlated rolling-average samples.
+        // caused by highly correlated rolling-average samples. Even a sparse bin is kept:
+        // in real conditions the native tracker can provide only one or two valid samples/s.
         if (temporalBinStartedAtRef.current === null) {
           temporalBinStartedAtRef.current = sample.timestamp;
         }
         temporalBinRef.current.push(point);
         if (sample.timestamp - temporalBinStartedAtRef.current >= 1000) {
           const completedBin = temporalBinRef.current;
-          if (completedBin.length >= 3) {
+          if (completedBin.length >= 1) {
             const consolidated = medianTimedPoint(completedBin);
             if (alignmentPhaseRef.current === 'reference') {
               setTrackingTrail((trail) => [...trail, consolidated].slice(-120));
