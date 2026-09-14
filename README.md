@@ -7,37 +7,39 @@ Le téléphone se connecte directement au Wi-Fi créé par l’application
 **Smart Remote Control** du Sony A7R II. Il affiche le Live View, permet de
 sélectionner automatiquement jusqu’à 12 étoiles et suit leur déplacement commun afin de mesurer la dérive.
 
-> La chaîne mono-étoile a été validée sur le ciel. Le suivi multi-étoiles et la mesure complète de dérive restent à valider sur le terrain. L’application ne commande pas l’AstroTrac et ne fournit pas encore automatiquement le sens de correction des vis d’azimut et d’altitude.
+> La chaîne mono-étoile, la sélection multi-étoiles, le mode Focus, l’assistant de prise de vue et la latence d’affichage ont été validés sur le terrain. Le plate solving hors ligne reste à valider avec des images réelles. L’application ne commande pas l’AstroTrac et ne fournit pas encore automatiquement le sens de correction des vis d’azimut et d’altitude.
 
 ## État du projet
 
+**Légende :** ✅ validé · ⚠️ à valider ou à terminer · ❌ non validé ou non disponible
+
 | Fonction | État | Remarque |
 | --- | --- | --- |
-| Connexion Wi-Fi au Sony A7R II | Validée | ScalarWebAPI via Smart Remote Control |
-| Découverte SSDP du boîtier | Validée | Avec essais de secours sur les adresses Sony connues |
-| Démarrage du mode distant et du Live View | Validé | Séquence compatible avec l’A7R II |
-| Affichage continu du Live View | Validé | Environ 10 images/s observées |
-| Zoom tactile et boutons +/− | Validé | Zoom d’affichage de ×1 à ×10 |
-| Déplacement dans l’image zoomée | Validé | Glissement à un doigt |
-| Sélection d’une étoile par toucher | Validée | Les coordonnées tiennent compte du zoom et du déplacement |
-| Sélection automatique d’une étoile | Validée sur le ciel | Perte/reprise, étoile faible, saturation et perturbations testées en mono-étoile |
-| Sélection automatique multi-étoiles | Implémentée, à tester | Choisit de 1 à 12 étoiles isolées, non saturées et éloignées des bords |
-| Suivi multi-étoiles | Implémenté, à tester | Consensus robuste des vecteurs puis moyenne pondérée par SNR et HFD |
-| Suivi du centroïde de l’étoile | Validé sur le ciel | Calcul natif Android à 5 mesures/s, inspiré de PHD2 |
-| Mode Focus multi-étoiles | Implémenté, à tester | HFR médian sur 1 à 12 étoiles et médiane glissante sur 7 images |
-| Assistant de prise de vue | Implémenté, à tester | Pose standard 30 s/RAW 14 bits ou BULB 5–300 s/RAW 12 bits |
-| Plate solving hors ligne | Implémenté, à tester | Astrometry.net natif sur une frame Live View ; index 4109–4119 téléchargés séparément |
-| Filtrage temporel sur 1 seconde | Validé sur le ciel | Régression pour l’affichage et médiane par seconde pour la trace |
-| Qualité Live View maximale | Implémentée, à confirmer | Demande de taille Sony `M` si disponible, sinon repli automatique |
-| Réduction de la latence d’affichage | Implémentée, à tester | Les anciennes images sont abandonnées au lieu d’être mises en file |
-| Trace de déplacement de l’étoile | Validée sur le ciel | Jusqu’à 120 points, soit environ 2 minutes |
-| Droite robuste de la trace | Validée sur le ciel | Ajustement robuste et rejet des points aberrants |
-| Référence monture arrêtée | Implémentée, à tester | Acquisition guidée puis gel de la droite robuste |
-| Mesure de dérive signée | Implémentée, à tester | Écart perpendiculaire et pente robuste en pixels par minute |
-| Pré-alignement avec le téléphone | Implémenté, à tester | GPS, accéléromètre et magnétomètre ; l’écran fait face au pôle |
-| EAS Update | Configuré | Vérification et installation également disponibles depuis l’application |
-| Identification de la version | Implémentée | SHA Git publié et identifiant court de l’OTA exécutée |
-| Guidage azimut/altitude complet | À développer | Voir la feuille de route |
+| Connexion Wi-Fi au Sony A7R II | ✅ Validée | ScalarWebAPI via Smart Remote Control |
+| Découverte SSDP du boîtier | ✅ Validée | Avec essais de secours sur les adresses Sony connues |
+| Démarrage du mode distant et du Live View | ✅ Validé | Séquence compatible avec l’A7R II |
+| Affichage continu du Live View | ✅ Validé | Environ 10 images/s observées |
+| Zoom tactile et boutons +/− | ✅ Validé | Zoom d’affichage de ×1 à ×10 |
+| Déplacement dans l’image zoomée | ✅ Validé | Glissement à un doigt |
+| Sélection d’une étoile par toucher | ✅ Validée | Les coordonnées tiennent compte du zoom et du déplacement |
+| Sélection automatique d’une étoile | ✅ Validée sur le ciel | Perte/reprise, étoile faible, saturation et perturbations testées en mono-étoile |
+| Sélection automatique multi-étoiles | ✅ Validée | Choisit de 1 à 12 étoiles isolées, non saturées et éloignées des bords |
+| Suivi multi-étoiles | ✅ Validé | Consensus robuste des vecteurs puis moyenne pondérée par SNR et HFD |
+| Suivi du centroïde de l’étoile | ✅ Validé sur le ciel | Calcul natif Android à 5 mesures/s, inspiré de PHD2 |
+| Mode Focus multi-étoiles | ✅ Validé | HFR médian sur 1 à 12 étoiles et médiane glissante sur 7 images |
+| Assistant de prise de vue | ✅ Validé | Pose standard 30 s/RAW 14 bits ou BULB 5–300 s/RAW 12 bits |
+| Plate solving hors ligne | ⚠️ À tester | Astrometry.net natif sur une frame Live View ; index 4109–4119 téléchargés séparément |
+| Filtrage temporel sur 1 seconde | ✅ Validé sur le ciel | Régression pour l’affichage et médiane par seconde pour la trace |
+| Qualité Live View maximale | ⚠️ Implémentée, à confirmer | Demande de taille Sony `M` si disponible, sinon repli automatique |
+| Réduction de la latence d’affichage | ✅ Validée | Les anciennes images sont abandonnées au lieu d’être mises en file |
+| Trace de déplacement de l’étoile | ✅ Validée sur le ciel | Jusqu’à 120 points, soit environ 2 minutes |
+| Droite robuste de la trace | ✅ Validée sur le ciel | Ajustement robuste et rejet des points aberrants |
+| Référence monture arrêtée | ⚠️ Implémentée, à tester | Acquisition guidée puis gel de la droite robuste |
+| Mesure de dérive signée | ⚠️ Implémentée, à tester | Écart perpendiculaire et pente robuste en pixels par minute |
+| Pré-alignement avec le téléphone | ⚠️ Implémenté, à tester | GPS, accéléromètre et magnétomètre ; l’écran fait face au pôle |
+| EAS Update | ✅ Configuré | Vérification et installation également disponibles depuis l’application |
+| Identification de la version | ✅ Implémentée | SHA Git publié et identifiant court de l’OTA exécutée |
+| Guidage azimut/altitude complet | ❌ À développer | Voir la feuille de route |
 
 ## Principe de la mesure
 
@@ -354,16 +356,25 @@ Un nouveau build Android reste obligatoire après une modification de :
 - le moteur natif Astrometry.net ;
 - la version native ou la politique de runtime.
 
+## Prochaines étapes
+
+- [ ] ⚠️ **Assistant de cadrage** : après le plate solving, superposer un rectangle représentant le champ photographié. Sa taille et son orientation dépendront de la cible choisie, de la focale, du capteur et de la solution astrométrique.
+- [ ] ⚠️ **Amélioration de la source d’image** : déterminer si une photo courte prise par le boîtier peut fournir une image de meilleure qualité que le Live View pour le plate solving et l’assistant de cadrage, malgré le délai de déclenchement et de transfert.
+
 ## Feuille de route
 
 ### Validation immédiate
+
+- [x] valider la sélection automatique multi-étoiles ;
+- [x] valider le mode Focus multi-étoiles ;
+- [x] valider l’assistant de prise de vue ;
 
 - [x] valider la sélection automatique mono-étoile ;
 - [x] vérifier la perte puis la reprise du verrouillage ;
 - [x] tester une étoile faible et une étoile saturée ;
 - [x] vérifier le rejet d’une mesure perturbée et la stabilité de la droite robuste ;
-- [ ] vérifier que la file d’images ne crée plus plusieurs secondes de retard ;
-- [ ] mesurer la latence réelle entre un mouvement devant le Sony et l’écran ;
+- [x] vérifier que la file d’images ne crée plus plusieurs secondes de retard ;
+- [x] mesurer la latence réelle entre un mouvement devant le Sony et l’écran ;
 - [ ] confirmer la résolution Live View effectivement fournie par l’A7R II ;
 - [ ] valider le plate solving avec les Live View à 50, 90 et 180 mm ;
 - [ ] comparer le bruit des positions brutes et filtrées sur une minute ;
