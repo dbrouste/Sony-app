@@ -1021,16 +1021,6 @@ export default function App() {
     return <CaptureAssistantScreen camera={camera} onClose={() => setActiveScreen('camera')} />;
   }
 
-  if (activeScreen === 'plate' && camera) {
-    return (
-      <PlateSolvingScreen
-        camera={camera}
-        streaming={streaming}
-        onClose={() => setActiveScreen('camera')}
-      />
-    );
-  }
-
   if (!camera) {
     return (
       <SafeAreaView style={styles.centeredPage}>
@@ -1045,6 +1035,7 @@ export default function App() {
   }
 
   return (
+    <View style={styles.appRoot}>
     <SafeAreaView style={styles.page}>
       <StatusBar hidden />
 
@@ -1526,10 +1517,33 @@ export default function App() {
         </ScrollView>
       </View>
     </SafeAreaView>
+      {activeScreen === 'plate' ? (
+        <View style={styles.screenOverlay}>
+          <PlateSolvingScreen
+            camera={camera}
+            streaming={streaming}
+            onClose={() => setActiveScreen('camera')}
+          />
+        </View>
+      ) : null}
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
+  appRoot: {
+    flex: 1,
+    backgroundColor: '#080b10',
+  },
+  screenOverlay: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    zIndex: 100,
+    backgroundColor: '#080b10',
+  },
   page: {
     flex: 1,
     flexDirection: 'row',
