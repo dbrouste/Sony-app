@@ -1,7 +1,9 @@
 package expo.modules.astrometry
 
 import android.database.Cursor
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Color
 import android.net.Uri
 import android.provider.OpenableColumns
 import expo.modules.kotlin.modules.Module
@@ -59,6 +61,10 @@ class ExpoAstrometryModule : Module() {
 
     AsyncFunction("solveImage") { uri: String, focalLength: Int ->
       solveImage(uri, focalLength)
+    }
+
+    AsyncFunction("solveMedianImages") { uris: List<String>, focalLength: Int ->
+      solveMedianImages(uris, focalLength)
     }
   }
 
@@ -263,14 +269,9 @@ class ExpoAstrometryModule : Module() {
     }
   }
 
-  private fun solveImage(uriString: String, focalLength: Int): Map<String, Any?> {
-    val required = requiredIndexes(focalLength)
-    val missing = required.filterNot(::isValid)
-    if (missing.isNotEmpty()) {
-      throw IllegalStateException("Catalogue incomplet : ${missing.joinToString { it.fileName }}")
-    }
+  private fun decodeBitmap(uriString: String): Bitmap {
     val uri = Uri.parse(uriString)
-    val bitmap = if (uri.scheme == "content") {
+    return if (uri.scheme == "content") {
       requireNotNull(context().contentResolver.openInputStream(uri)) {
         "Impossible d'ouvrir l'image du Live View"
       }.use { BitmapFactory.decodeStream(it) }
@@ -278,52 +279,161 @@ class ExpoAstrometryModule : Module() {
       val path = if (uri.scheme == "file") uri.path else uriString
       BitmapFactory.decodeFile(path)
     } ?: throw IllegalStateException("Impossible de décoder l’image Live View.")
+  }
 
-    try {
-      val downsample = AstrometryNative.computeDownsample(bitmap.width, bitmap.height)
-      val stars = AstrometryNative.detectStars(bitmap, 8.0f, 1.0f, downsample)
-        ?: throw IllegalStateException("Aucune étoile détectée dans le Live View.")
-      if (stars.size < 10) {
-        throw IllegalStateException("Seulement ${stars.size} étoiles détectées ; augmente l’ISO ou l’exposition du Live View.")
-      }
-      val expectedScale = ARCSECONDS_PER_RADIAN * SENSOR_WIDTH_MM / focalLength / bitmap.width
-      val result = AstrometryNative.solveField(
-        stars,
-        bitmap.width,
-        bitmap.height,
-        required.map { indexFile(it).absolutePath }.toTypedArray(),
-        expectedScale * 0.75,
-        expectedScale * 1.25,
-      )
-      if (!result.solved) {
-        throw IllegalStateException("Aucune solution astrométrique trouvée avec ${stars.size} étoiles.")
-      }
-      return mapOf(
-        "solved" to true,
-        "ra" to result.ra,
-        "dec" to result.dec,
-        "crpixX" to result.crpixX,
-        "crpixY" to result.crpixY,
-        "cd11" to result.cd[0],
-        "cd12" to result.cd[1],
-        "cd21" to result.cd[2],
-        "cd22" to result.cd[3],
-        "pixelScale" to result.pixelScale,
-        "rotation" to result.rotation,
-        "logOdds" to result.logOdds,
-        "starCount" to stars.size,
-        "imageWidth" to bitmap.width,
-        "imageHeight" to bitmap.height,
-      )
+  private fun solveImage(uriString: String, focalLength: Int): Map<String, Any?> {
+    val bitmap = decodeBitmap(uriString)
+    return try {
+      solveBitmap(bitmap, focalLength, 1)
     } finally {
       bitmap.recycle()
     }
+  }
+
+  private fun solveMedianImages(uriStrings: List<String>, focalLength: Int): Map<String, Any?> {
+    require(uriStrings.size >= 3) { "Au moins 3 frames Live View sont nécessaires pour la médiane." }
+    require(uriStrings.size <= MAX_MEDIAN_FRAMES) {
+      "La médiane accepte au maximum $MAX_MEDIAN_FRAMES frames."
+    }
+
+    val framePixels = ArrayList<IntArray>(uriStrings.size)
+    var width = 0
+    var height = 0
+    try {
+      uriStrings.forEachIndexed { index, uriString ->
+        val bitmap = decodeBitmap(uriString)
+        try {
+          if (index == 0) {
+            width = bitmap.width
+            height = bitmap.height
+          } else if (bitmap.width != width || bitmap.height != height) {
+            throw IllegalStateException(
+              "Les frames Live View n'ont pas toutes la même taille " +
+                "(${bitmap.width} × ${bitmap.height} au lieu de $width × $height)."
+            )
+          }
+          framePixels += IntArray(width * height).also { pixels ->
+            bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
+          }
+        } finally {
+          bitmap.recycle()
+        }
+      }
+
+      val red = IntArray(framePixels.size)
+      val green = IntArray(framePixels.size)
+      val blue = IntArray(framePixels.size)
+      val outputPixels = IntArray(width * height)
+      for (pixelIndex in outputPixels.indices) {
+        for (frameIndex in framePixels.indices) {
+          val color = framePixels[frameIndex][pixelIndex]
+          red[frameIndex] = Color.red(color)
+          green[frameIndex] = Color.green(color)
+          blue[frameIndex] = Color.blue(color)
+        }
+        red.sort()
+        green.sort()
+        blue.sort()
+        outputPixels[pixelIndex] = Color.rgb(
+          medianChannel(red),
+          medianChannel(green),
+          medianChannel(blue),
+        )
+      }
+
+      val medianBitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+      medianBitmap.setPixels(outputPixels, 0, width, 0, 0, width, height)
+      return try {
+        solveBitmap(medianBitmap, focalLength, framePixels.size)
+      } finally {
+        medianBitmap.recycle()
+      }
+    } finally {
+      deletePreviewCacheFiles(uriStrings)
+    }
+  }
+
+  private fun medianChannel(sortedValues: IntArray): Int {
+    val middle = sortedValues.size / 2
+    return if (sortedValues.size % 2 == 0) {
+      (sortedValues[middle - 1] + sortedValues[middle]) / 2
+    } else {
+      sortedValues[middle]
+    }
+  }
+
+  private fun deletePreviewCacheFiles(uriStrings: List<String>) {
+    val cachePath = context().cacheDir.canonicalPath + File.separator
+    for (uriString in uriStrings) {
+      val uri = Uri.parse(uriString)
+      if (uri.scheme != "file") continue
+      val file = File(uri.path ?: continue)
+      runCatching {
+        if (file.canonicalPath.startsWith(cachePath) && file.name.startsWith("sony-camera-")) {
+          file.delete()
+        }
+      }
+    }
+  }
+
+  private fun solveBitmap(
+    bitmap: Bitmap,
+    focalLength: Int,
+    stackedFrameCount: Int,
+  ): Map<String, Any?> {
+    val required = requiredIndexes(focalLength)
+    val missing = required.filterNot(::isValid)
+    if (missing.isNotEmpty()) {
+      throw IllegalStateException("Catalogue incomplet : ${missing.joinToString { it.fileName }}")
+    }
+
+    val downsample = AstrometryNative.computeDownsample(bitmap.width, bitmap.height)
+    val stars = AstrometryNative.detectStars(bitmap, 8.0f, 1.0f, downsample)
+      ?: throw IllegalStateException("Aucune étoile détectée dans le Live View.")
+    if (stars.size < 10) {
+      throw IllegalStateException(
+        "Seulement ${stars.size} étoiles détectées ; augmente l’ISO ou l’exposition du Live View."
+      )
+    }
+    val expectedScale = ARCSECONDS_PER_RADIAN * SENSOR_WIDTH_MM / focalLength / bitmap.width
+    val result = AstrometryNative.solveField(
+      stars,
+      bitmap.width,
+      bitmap.height,
+      required.map { indexFile(it).absolutePath }.toTypedArray(),
+      expectedScale * 0.75,
+      expectedScale * 1.25,
+    )
+    if (!result.solved) {
+      throw IllegalStateException(
+        "Aucune solution astrométrique trouvée avec ${stars.size} étoiles."
+      )
+    }
+    return mapOf(
+      "solved" to true,
+      "ra" to result.ra,
+      "dec" to result.dec,
+      "crpixX" to result.crpixX,
+      "crpixY" to result.crpixY,
+      "cd11" to result.cd[0],
+      "cd12" to result.cd[1],
+      "cd21" to result.cd[2],
+      "cd22" to result.cd[3],
+      "pixelScale" to result.pixelScale,
+      "rotation" to result.rotation,
+      "logOdds" to result.logOdds,
+      "starCount" to stars.size,
+      "imageWidth" to bitmap.width,
+      "imageHeight" to bitmap.height,
+      "stackedFrameCount" to stackedFrameCount,
+    )
   }
 
   companion object {
     private const val INDEX_BASE_URL = "https://data.astrometry.net/4100"
     private const val ARCSECONDS_PER_RADIAN = 206264.80624709636
     private const val SENSOR_WIDTH_MM = 35.9
+    private const val MAX_MEDIAN_FRAMES = 15
 
     private val INDEXES = listOf(
       IndexSpec(4109, 49_772_160L, "9a65a52ce04e3e75af950e5866f81b1b"),

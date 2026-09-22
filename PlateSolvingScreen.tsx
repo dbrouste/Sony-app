@@ -32,6 +32,13 @@ type CameraApi = {
 
 type FocalLength = 50 | 90 | 180;
 
+const MEDIAN_FRAME_COUNT = 11;
+const MEDIAN_CAPTURE_INTERVAL_MS = 100;
+
+function delay(milliseconds: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
+}
+
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
@@ -185,11 +192,29 @@ export default function PlateSolvingScreen({
     setMessage('Capture de la meilleure frame Live View…');
     setSolution(null);
     try {
-      const frame = await camera.capturePreviewFrame();
-      setMessage(`Détection des étoiles dans ${frame.width} × ${frame.height}, puis résolution…`);
-      const result = await Astrometry.solveImage(frame.uri, focalLength);
+      const startedAt = Date.now();
+      const frames: SonyPhoto[] = [];
+      for (let index = 0; index < MEDIAN_FRAME_COUNT; index += 1) {
+        setMessage(`Acquisition Live View ${index + 1}/${MEDIAN_FRAME_COUNT}…`);
+        frames.push(await camera.capturePreviewFrame());
+        if (index + 1 < MEDIAN_FRAME_COUNT) {
+          const nextCaptureAt = startedAt + (index + 1) * MEDIAN_CAPTURE_INTERVAL_MS;
+          await delay(Math.max(0, nextCaptureAt - Date.now()));
+        }
+      }
+      if (frames.length < 3) {
+        throw new Error('Moins de 3 frames Live View exploitables.');
+      }
+      const firstFrame = frames[0];
+      setMessage(
+        `Médiane de ${frames.length} frames (${firstFrame.width} × ${firstFrame.height}), puis résolution…`
+      );
+      const result = await Astrometry.solveMedianImages(
+        frames.map((frame) => frame.uri),
+        focalLength
+      );
       setSolution(result);
-      setMessage('Champ résolu hors ligne.');
+      setMessage(`Champ résolu sur la médiane de ${result.stackedFrameCount} frames.`);
     } catch (nextError) {
       setError(errorMessage(nextError));
     } finally {
@@ -298,7 +323,7 @@ export default function PlateSolvingScreen({
         <View style={styles.card}>
           <Text style={styles.cardTitle}>3. Résoudre le Live View</Text>
           <Text style={styles.hint}>
-            Lance le Live View avant d’ouvrir cet écran. L’image analysée est une frame JPEG de prévisualisation ; aucune photo n’est déclenchée.
+            Lance le Live View avant d’ouvrir cet écran. L’application capture 11 frames sur environ 1 seconde et calcule leur médiane pixel par pixel avant la résolution ; aucune photo n’est déclenchée.
           </Text>
           <Button
             title="Résoudre le champ"
@@ -327,6 +352,7 @@ export default function PlateSolvingScreen({
             <Text style={styles.details}>
               Rotation {solution.rotation.toFixed(2)}° · échelle {solution.pixelScale.toFixed(2)}″/px
               {'\n'}{solution.starCount} étoiles · image {solution.imageWidth} × {solution.imageHeight}
+              {' · '}{solution.stackedFrameCount} frames médianes
               {'\n'}Confiance log-odds {solution.logOdds.toFixed(1)}
             </Text>
           </View>

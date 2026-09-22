@@ -28,7 +28,7 @@ sélectionner automatiquement jusqu’à 12 étoiles et suit leur déplacement c
 | Suivi du centroïde de l’étoile | ✅ Validé sur le ciel | Calcul natif Android à 5 mesures/s, inspiré de PHD2 |
 | Mode Focus multi-étoiles | ✅ Validé | HFR médian sur 1 à 12 étoiles et médiane glissante sur 7 images |
 | Assistant de prise de vue | ✅ Validé | Pose standard 30 s/RAW 14 bits ou BULB 5–300 s/RAW 12 bits |
-| Plate solving hors ligne | ⚠️ À tester | Astrometry.net natif sur une frame Live View ; index 4109–4119 téléchargés séparément |
+| Plate solving hors ligne | ⚠️ À tester | Astrometry.net natif sur la médiane de 11 frames Live View acquises en 1 s ; index 4109–4119 téléchargés séparément |
 | Filtrage temporel sur 1 seconde | ✅ Validé sur le ciel | Régression pour l’affichage et médiane par seconde pour la trace |
 | Qualité Live View maximale | ⚠️ Implémentée, à confirmer | Demande de taille Sony `M` si disponible, sinon repli automatique |
 | Réduction de la latence d’affichage | ✅ Validée | Les anciennes images sont abandonnées au lieu d’être mises en file |
@@ -190,8 +190,9 @@ le boîtier après la sélection de `30 s` ou `BULB`.
 
 ### Plate solving hors ligne
 
-Le bouton **Plate solving hors ligne** analyse une frame JPEG du Live View sans
-déclencher l’obturateur. Le moteur Astrometry.net est compilé dans l’APK, tandis
+Le bouton **Plate solving hors ligne** acquiert 11 frames JPEG du Live View sur environ
+une seconde, calcule leur médiane pixel par pixel sans alignement, puis analyse l’image
+résultante sans déclencher l’obturateur. Le moteur Astrometry.net est compilé dans l’APK, tandis
 que les fichiers d’index restent séparés :
 
 - 50 mm : index `4113` à `4119`, environ 6 Mo ;
@@ -213,8 +214,9 @@ télécharger les index avec la connexion Internet habituelle du téléphone.
 
 La focale sélectionnée sert à borner l’échelle recherchée à ±25 %. La solution
 affiche le centre RA/Dec, la rotation du champ, l’échelle en secondes d’arc par
-pixel, le nombre d’étoiles détectées et la confiance. Cette fonction nécessite
-l’APK natif `0.2.0` ou plus récent et doit encore être validée avec des frames
+pixel, le nombre d’étoiles détectées et la confiance. La médiane réduit le bruit et les artefacts intermittents tout en conservant la résolution
+native du flux. Au moins trois frames cohérentes sont nécessaires. Cette fonction nécessite
+l’APK natif `0.2.3` ou plus récent et doit encore être validée avec des frames
 réelles de l’A7R II.
 
 ### Droite robuste

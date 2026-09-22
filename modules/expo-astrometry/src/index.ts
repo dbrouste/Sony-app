@@ -34,6 +34,7 @@ export type AstrometrySolveResult = {
   starCount: number;
   imageWidth: number;
   imageHeight: number;
+  stackedFrameCount: number;
 };
 
 export type CatalogProgress = {
@@ -55,6 +56,7 @@ declare class ExpoAstrometryNativeModule extends NativeModule<AstrometryEvents> 
   deleteCatalog(): AstrometryCatalogStatus;
   importIndex(uri: string): Promise<AstrometryCatalogStatus>;
   solveImage(uri: string, focalLength: number): Promise<AstrometrySolveResult>;
+  solveMedianImages(uris: string[], focalLength: number): Promise<AstrometrySolveResult>;
 }
 
 export default requireNativeModule<ExpoAstrometryNativeModule>('ExpoAstrometry');
