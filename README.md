@@ -213,10 +213,11 @@ hors ligne** reste accessible lorsque le boîtier est déconnecté afin de
 télécharger les index avec la connexion Internet habituelle du téléphone.
 
 La focale sélectionnée sert à borner l’échelle recherchée à ±25 %. La solution
-affiche le centre RA/Dec, la rotation du champ, l’échelle en secondes d’arc par
-pixel, le nombre d’étoiles détectées et la confiance. La médiane réduit le bruit et les artefacts intermittents tout en conservant la résolution
+affiche les coordonnées RA/Dec calculées au pixel central de l’image (et non le
+point de référence interne du WCS), la rotation du champ, l’échelle en secondes
+d’arc par pixel, le nombre d’étoiles détectées et la confiance. La médiane réduit le bruit et les artefacts intermittents tout en conservant la résolution
 native du flux. Au moins trois frames cohérentes sont nécessaires. Cette fonction nécessite
-l’APK natif `0.2.4` ou plus récent et doit encore être validée avec des frames
+l’APK natif `0.2.5` ou plus récent et doit encore être validée avec des frames
 réelles de l’A7R II.
 
 ### Droite robuste

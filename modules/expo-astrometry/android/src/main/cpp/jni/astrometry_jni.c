@@ -579,10 +579,23 @@ Java_expo_modules_astrometry_AstrometryNative_solveFieldNative(
 
         double pixscale = tan_pixel_scale(tan);
         double rotation = atan2(tan->cd[0][1], tan->cd[0][0]) * 180.0 / M_PI;
+        double centerRa = 0.0;
+        double centerDec = 0.0;
+
+        // CRVAL describes the WCS reference pixel, which Astrometry.net may
+        // place away from the image centre and can change between otherwise
+        // equivalent solutions. Convert the actual FITS pixel centre instead.
+        tan_pixelxy2radec(
+            tan,
+            (imageWidth + 1.0) / 2.0,
+            (imageHeight + 1.0) / 2.0,
+            &centerRa,
+            &centerDec
+        );
 
         result[0] = 1.0;  // solved
-        result[1] = tan->crval[0];  // RA
-        result[2] = tan->crval[1];  // Dec
+        result[1] = centerRa;  // RA at image centre
+        result[2] = centerDec;  // Dec at image centre
         result[3] = tan->crpix[0];  // crpix X
         result[4] = tan->crpix[1];  // crpix Y
         result[5] = tan->cd[0][0];  // CD matrix
@@ -593,8 +606,8 @@ Java_expo_modules_astrometry_AstrometryNative_solveFieldNative(
         result[10] = rotation;
         result[11] = mo->logodds;
 
-        LOGI("SOLVED! RA=%.4f, Dec=%.4f, scale=%.2f arcsec/pix, rotation=%.1f deg",
-             tan->crval[0], tan->crval[1], pixscale, rotation);
+        LOGI("SOLVED! center RA=%.4f, Dec=%.4f, scale=%.2f arcsec/pix, rotation=%.1f deg",
+             centerRa, centerDec, pixscale, rotation);
     } else {
         LOGI("NOT SOLVED after all depths");
     }
