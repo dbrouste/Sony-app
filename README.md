@@ -216,7 +216,7 @@ La focale sélectionnée sert à borner l’échelle recherchée à ±25 %. La s
 affiche le centre RA/Dec, la rotation du champ, l’échelle en secondes d’arc par
 pixel, le nombre d’étoiles détectées et la confiance. La médiane réduit le bruit et les artefacts intermittents tout en conservant la résolution
 native du flux. Au moins trois frames cohérentes sont nécessaires. Cette fonction nécessite
-l’APK natif `0.2.3` ou plus récent et doit encore être validée avec des frames
+l’APK natif `0.2.4` ou plus récent et doit encore être validée avec des frames
 réelles de l’A7R II.
 
 ### Droite robuste
@@ -425,6 +425,7 @@ Un nouveau build Android reste obligatoire après une modification de :
   sur l’A7R II avec Smart Remote Control ;
 - la qualité du Live View reste limitée par ce que le boîtier transmet ;
 - le plate solving exige suffisamment d’étoiles visibles dans le JPEG Live View et reste à valider sur le ciel ;
+- chaque résolution libère explicitement les index Astrometry.net et s’arrête après 25 s sans solution ;
 - le zoom de l’application n’ajoute aucun détail à l’image source ;
 - le suivi suppose une étoile suffisamment contrastée et peu de sources plus
   lumineuses à proximité ;

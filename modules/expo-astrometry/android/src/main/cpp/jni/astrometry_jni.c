@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <time.h>
 
 #include "astrometry/simplexy.h"
 #include "astrometry/image2xy.h"
@@ -17,6 +18,12 @@
 #define LOG_TAG "AstrometryNative"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
+#define SOLVE_TIMEOUT_SECONDS 25
+
+static time_t solve_timer_callback(void *userdata) {
+    const time_t deadline = *((const time_t *)userdata);
+    return time(NULL) >= deadline ? 0 : 1;
+}
 
 static int compare_floats(const void *a, const void *b) {
     float fa = *(const float *)a;
@@ -478,8 +485,19 @@ Java_expo_modules_astrometry_AstrometryNative_solveFieldNative(
     solver->tweak_aborder = 2;           // Match solve-field default
     solver->tweak_abporder = 2;          // Match solve-field default
 
+    // Stop an unlucky or false match from monopolizing the native worker.
+    time_t solveDeadline = time(NULL) + SOLVE_TIMEOUT_SECONDS;
+    solver->userdata = &solveDeadline;
+    solver->timer_callback = solve_timer_callback;
+
     // Load index files
     int numIndexes = (*env)->GetArrayLength(env, indexPaths);
+    index_t** loadedIndexes = calloc((size_t)numIndexes, sizeof(index_t*));
+    if (!loadedIndexes) {
+        LOGE("Failed to allocate index ownership table");
+        solver_free(solver);
+        return NULL;
+    }
     LOGI("Loading %d index files...", numIndexes);
 
     for (int i = 0; i < numIndexes; i++) {
@@ -488,6 +506,7 @@ Java_expo_modules_astrometry_AstrometryNative_solveFieldNative(
 
         index_t* idx = index_load(path, 0, NULL);
         if (idx) {
+            loadedIndexes[i] = idx;
             solver_add_index(solver, idx);
             LOGI("Loaded index: %s", path);
         } else {
@@ -495,6 +514,7 @@ Java_expo_modules_astrometry_AstrometryNative_solveFieldNative(
         }
 
         (*env)->ReleaseStringUTFChars(env, jpath, path);
+        (*env)->DeleteLocalRef(env, jpath);
     }
 
     // Depth iteration - same as solve-field default depths
@@ -510,6 +530,10 @@ Java_expo_modules_astrometry_AstrometryNative_solveFieldNative(
     int lasthi = 0;
 
     for (int d = 0; d < num_depths && !solved; d++) {
+        if (time(NULL) >= solveDeadline) {
+            LOGI("Solve timeout reached after %d seconds", SOLVE_TIMEOUT_SECONDS);
+            break;
+        }
         int startobj = lasthi;           // 0-indexed start
         int endobj = depths[d];          // 1-indexed end (exclusive in solver)
         lasthi = depths[d];
@@ -539,6 +563,9 @@ Java_expo_modules_astrometry_AstrometryNative_solveFieldNative(
         if (solver_did_solve(solver)) {
             solved = 1;
             LOGI("SOLVED at depth %d-%d!", startobj + 1, endobj);
+        } else if (time(NULL) >= solveDeadline) {
+            LOGI("Solve timeout reached after %d seconds", SOLVE_TIMEOUT_SECONDS);
+            break;
         }
     }
 
@@ -574,8 +601,13 @@ Java_expo_modules_astrometry_AstrometryNative_solveFieldNative(
 
     (*env)->SetDoubleArrayRegion(env, resultArray, 0, 12, result);
 
-    // Cleanup
+    // solver_free() releases the pointer list but does not own/free index_t.
+    // Keep explicit ownership here so every solve returns the catalog memory.
     solver_free(solver);
+    for (int i = 0; i < numIndexes; i++) {
+        if (loadedIndexes[i]) index_free(loadedIndexes[i]);
+    }
+    free(loadedIndexes);
 
     return resultArray;
 }
