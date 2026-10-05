@@ -451,6 +451,7 @@ export default function App() {
     initialZoom: 1,
     initialPan: { x: 0, y: 0 },
     moved: false,
+    hadMultipleTouches: false,
   });
 
   const stateName = cameraState?.state ?? 'unsupported';
@@ -658,12 +659,14 @@ export default function App() {
             initialZoom: previewZoomRef.current,
             initialPan: previewPanRef.current,
             moved: false,
+            hadMultipleTouches: touches.length >= 2,
           };
         },
         onPanResponderMove: (event, gesture) => {
           const touches = event.nativeEvent.touches;
           const session = gestureRef.current;
           if (touches.length >= 2) {
+            session.hadMultipleTouches = true;
             const distance = touchDistance(touches);
             // Android normally grants the responder to the first finger. Initialise the
             // pinch baseline when the second finger actually arrives, not only at grant.
@@ -694,6 +697,7 @@ export default function App() {
           const session = gestureRef.current;
           const wasTap =
             session.initialTouchCount === 1 &&
+            !session.hadMultipleTouches &&
             !session.moved &&
             Math.hypot(gesture.dx, gesture.dy) < 6 &&
             Date.now() - session.startedAt < 500;
